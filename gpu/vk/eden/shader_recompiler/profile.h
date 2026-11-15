@@ -23,6 +23,8 @@ struct Profile {
     bool support_uniform_and_storage_buffer_16bit{};
     bool support_storage_buffer_16bit{};
     bool support_int64{};
+    /// Host supports physical storage buffer pointers (Vulkan buffer device address).
+    bool support_buffer_device_address{};
     bool support_vertex_instance_id{};
     bool support_float_controls{};
     bool support_separate_denorm_behavior{};

@@ -6511,7 +6511,7 @@ bool mesh_args_ready() {
         for (uint32_t i = 0; i < kMeshArgs; i++) w[i * 4] = 0, w[i * 4 + 1] = 1, w[i * 4 + 2] = 1, w[i * 4 + 3] = 0;
         VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         da.buffer = mesh_args_buffer;
-        mesh_args_address = vkGetBufferDeviceAddress(dev.device, &da);
+        mesh_args_address = dev.vk12.bufferDeviceAddress ? vkGetBufferDeviceAddress(dev.device, &da) : 0;
         if (!mesh_args_address) return discard();
         return true;
     }();
@@ -6558,6 +6558,7 @@ uint32_t fallback_task_groups(const Program& p) {
 }
 
 uint64_t fallback_buffer_address(VkBuffer buffer) {
+    if (!dev.vk12.bufferDeviceAddress) return 0;
     VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     info.buffer = buffer;
     return vkGetBufferDeviceAddress(dev.device, &info);
@@ -6586,7 +6587,7 @@ bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
     FallbackBuffers f;
     void* mapped = nullptr;
     const VkBufferUsageFlags usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+                                     (dev.vk12.bufferDeviceAddress ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0);
     // (the records' header is the vertex stage's indirect draw and the mesh stage's indirect dispatch)
     if (!create_buffer(records, usage | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, false, f.records, f.records_mem, &mapped)) return false;
     f.records_address = fallback_buffer_address(f.records);

@@ -59,6 +59,13 @@
 namespace mkwvk {
 namespace {
 
+VkDeviceAddress queried_buffer_address(VkBuffer buffer) {
+    if (!dev.vk12.bufferDeviceAddress) return 0;
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(dev.device, &info);
+}
+
 // Every raw imported-buffer destruction goes through here, including unpublished allocation rollback.
 // Published imports reach it only at the existing completion/eviction gates; no additional GPU wait.
 void destroy_import_buffer(VkBuffer buffer) {
@@ -165,11 +172,13 @@ void import_remember_failure(uint64_t lo, uint64_t hi) {
     import_holds.deny_for(lo, hi, import_now_ms());
 }
 
-constexpr VkBufferUsageFlags kUsage =
+constexpr VkBufferUsageFlags kBaseUsage =
     VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
-    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-    VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+    VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+VkBufferUsageFlags guest_buffer_usage() {
+    return kBaseUsage | (dev.vk12.bufferDeviceAddress ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0);
+}
 
 #ifdef __linux__
 // Guest memory handed to the GPU as a dma-buf over the game's own pages: the window is a memfd's (host/hos_main.c),
@@ -217,8 +226,8 @@ VkDeviceMemory dma_buf_memory(uint64_t lo, uint64_t size) {
     im.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
     im.fd = fd;
     VkMemoryAllocateFlagsInfo fl{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-    fl.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    im.pNext = &fl;
+    fl.flags = dev.vk12.bufferDeviceAddress ? VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT : 0;
+    im.pNext = dev.vk12.bufferDeviceAddress ? &fl : nullptr;
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.pNext = &im;
     ai.allocationSize = size;
@@ -243,7 +252,7 @@ bool import_dma_buf_pieces(uint64_t lo, uint64_t hi, uint64_t piece, Pool& p) {
     bi.pNext = &eb;
     bi.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT;
     bi.size = hi - lo;
-    bi.usage = kUsage;
+    bi.usage = guest_buffer_usage();
     VkBuffer buffer = VK_NULL_HANDLE;
     if (vkCreateBuffer(dev.device, &bi, nullptr, &buffer) != VK_SUCCESS) {
         if (dmabuf_failures++ < 8) logf("vk: pool %#llx..%#llx: no sparse buffer for its dma-bufs", (unsigned long long)lo, (unsigned long long)hi);
@@ -352,7 +361,7 @@ bool import_dma_buf(uint64_t lo, uint64_t hi, Pool& p) {
         VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bi.pNext = &eb;
         bi.size = hi - lo;
-        bi.usage = kUsage;
+        bi.usage = guest_buffer_usage();
         VkBuffer buffer = VK_NULL_HANDLE;
         if (vkCreateBuffer(dev.device, &bi, nullptr, &buffer) != VK_SUCCESS) return false;
         const VkDeviceMemory memory = dma_buf_memory(lo, hi - lo);
@@ -367,7 +376,7 @@ bool import_dma_buf(uint64_t lo, uint64_t hi, Pool& p) {
     }
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = p.buffer;
-    p.address = vkGetBufferDeviceAddress(dev.device, &da);
+    p.address = queried_buffer_address(p.buffer);
     if (env_on("RX_VK_LOG_ADDR"))   // (as import_pool's: which buffer a device fault's address is in)
         logf("vk: addr dma-buf %#llx..%#llx at gpu %#llx..%#llx", (unsigned long long)lo, (unsigned long long)hi,
              (unsigned long long)p.address, (unsigned long long)(p.address + (hi - lo)));
@@ -454,7 +463,7 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.pNext = &eb;
     bi.size = bytes;
-    bi.usage = kUsage;
+    bi.usage = guest_buffer_usage();
     if (vkCreateBuffer(dev.device, &bi, nullptr, &p.buffer) != VK_SUCCESS) {
         import_remember_failure(lo, hi);
         return false;
@@ -464,8 +473,8 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     im.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
     im.pHostPointer = ptr;
     VkMemoryAllocateFlagsInfo fl{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
-    fl.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
-    im.pNext = &fl;
+    fl.flags = dev.vk12.bufferDeviceAddress ? VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT : 0;
+    im.pNext = dev.vk12.bufferDeviceAddress ? &fl : nullptr;
     VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
     ai.pNext = &im;
     ai.allocationSize = bytes;
@@ -483,7 +492,7 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     }
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = p.buffer;
-    p.address = vkGetBufferDeviceAddress(dev.device, &da);
+    p.address = dev.vk12.bufferDeviceAddress ? queried_buffer_address(da.buffer) : 0;
     if (env_on("RX_VK_LOG_ADDR"))   // (diagnostics: which buffer a device fault's address is in)
         logf("vk: addr import %#llx..%#llx at gpu %#llx..%#llx", (unsigned long long)lo, (unsigned long long)hi,
              (unsigned long long)p.address, (unsigned long long)(p.address + (hi - lo)));
@@ -571,7 +580,7 @@ uint64_t memory_guest_pages() {
     static bool tried = false;
     if (tried) return guest_pages_address;
     tried = true;
-    if (env_on("RX_VK_NO_FOLLOW")) return 0;   // (on: Kokiri's lighting. The menus' blank text was the rule in graphics stages, now compute only)
+    if (env_on("RX_VK_NO_FOLLOW") || !dev.vk12.bufferDeviceAddress) return 0;
     VkBuffer b = VK_NULL_HANDLE;
     VmaAllocation a = nullptr;
     void* mapped = nullptr;
@@ -584,7 +593,7 @@ uint64_t memory_guest_pages() {
     std::memset(mapped, 0, bytes);
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = b;
-    guest_pages_address = vkGetBufferDeviceAddress(dev.device, &da);
+    guest_pages_address = queried_buffer_address(da.buffer);
     guest_pages_buffer = b;
     std::lock_guard pk(pools_mu);
     guest_pages = (uint64_t*)mapped;
@@ -1972,6 +1981,7 @@ int64_t memory_late_wait_ns() { return st_late_wait_ns.load(std::memory_order_re
 namespace {
 bool late_fix_on() {   // (not with the parallel replay: its segments' workers record copies out of the captures in any order)
     static const bool on = [] {   // (on unless an off value: env_value_off)
+        if (!dev.vk12.bufferDeviceAddress) return false;
         const char* e = getenv("RX_VK_LATE_FIX");
         return (!e || !env_value_off(e)) && !(getenv("RX_VK_PARALLEL") && atoi(getenv("RX_VK_PARALLEL")) > 1);
     }();
@@ -2027,7 +2037,7 @@ bool snap_page_make(uint32_t pg) {
         }
         VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         da.buffer = snap_buf;
-        snap_address = vkGetBufferDeviceAddress(dev.device, &da);
+        snap_address = queried_buffer_address(da.buffer);
     }
     SnapPage s;
     if (!snap_free.empty()) s.slot = snap_free.back(), snap_free.pop_back();   // (no range of it kept: the old page's words are never read)
@@ -2131,7 +2141,7 @@ void stamp_block_make(Pool& p, uint64_t guest) {
         return;
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = b.buf;
-    b.address = vkGetBufferDeviceAddress(dev.device, &da);
+    b.address = queried_buffer_address(da.buffer);
     b.pool = p.lo, b.shadow = p.shadow;
     stamp_blocks.emplace(key, b);
     stamp_pools[p.lo]++;
@@ -2226,7 +2236,7 @@ LateFixTable* late_fix_table_get(uint64_t bytes) {   // (a ring: one is taken ag
         }
         VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         da.buffer = t.buf;
-        t.address = vkGetBufferDeviceAddress(dev.device, &da);
+        t.address = queried_buffer_address(da.buffer);
         t.map = (uint8_t*)map, t.bytes = n;
     }
     late_fix_next = (late_fix_next + 1) % 16;
@@ -2239,7 +2249,7 @@ bool late_fix_build(Capture& c) {
     if (!late_fix_pipe_ready() || !c.buffer) return false;
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = c.buffer;
-    const VkDeviceAddress cap = vkGetBufferDeviceAddress(dev.device, &da);
+    const VkDeviceAddress cap = queried_buffer_address(da.buffer);
     // (the GPU's progress now, not at the capture: the late pages are copied again below from guest memory, which has every
     // write-back done by now, as the wait's copy had; the fixes are for the ones not done yet)
     const uint64_t D = std::max(c.late_done, vk_timeline_completed());
@@ -3312,7 +3322,7 @@ void sparse_table(const Pool& p, VkDeviceAddress mirror_address, size_t first, s
 VkDeviceAddress buffer_address(VkBuffer buffer) {
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = buffer;
-    return vkGetBufferDeviceAddress(dev.device, &da);
+    return queried_buffer_address(da.buffer);
 }
 /// A binding reached blocks [off, off + size): they are in use, whatever game pool is there (a binding with a guessed size
 /// runs past a pool's end), and are not given back while bindings keep reaching them (sparse_release). Without the lock too
@@ -4136,7 +4146,7 @@ void reap_mirrors() {   // (pools_mu held)
         if (env_on("RX_VK_LOG_ADDR")) {
             VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
             da.buffer = dead_mirrors.front().buffer;
-            logf("vk: addr mirror freed at gpu %#llx (value %llu, completed %llu)", (unsigned long long)vkGetBufferDeviceAddress(dev.device, &da),
+            logf("vk: addr mirror freed at gpu %#llx (value %llu, completed %llu)", (unsigned long long)queried_buffer_address(da.buffer),
                  (unsigned long long)dead_mirrors.front().value, (unsigned long long)mem_completed);
         }
         destroy_buffer(dead_mirrors.front().buffer, dead_mirrors.front().alloc);
@@ -4647,7 +4657,7 @@ bool mirror_make(Pool& pool) {
         VkMemoryRequirements sparse_req{};
         std::vector<uint8_t> live;
         uint64_t take = n;
-        if (mirror_sparse_on() && n <= (1ull << 30) && create_sparse_buffer(n, kUsage, sparse_buf, sparse_req)) {
+        if (mirror_sparse_on() && n <= (1ull << 30) && create_sparse_buffer(n, guest_buffer_usage(), sparse_buf, sparse_req)) {
             live = sparse_req.alignment ? sparse_mirror::live_blocks(p->lo, p->hi, sparse_req.alignment, guest_pools.begin(),
                                                                      guest_pools.end())
                                         : std::vector<uint8_t>{};
@@ -4678,7 +4688,7 @@ bool mirror_make(Pool& pool) {
                 return false;
             }
         }
-        if (!sparse_buf && !create_device_buffer(n, kUsage, p->mirror, p->mirror_alloc)) {
+        if (!sparse_buf && !create_device_buffer(n, guest_buffer_usage(), p->mirror, p->mirror_alloc)) {
             p->mstate = Pool::MIRROR_REFUSED;
             return false;
         }
@@ -5149,7 +5159,7 @@ bool shadow_make(Pool& p) {
         return false;
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = p.shadow;
-    p.shadow_address = vkGetBufferDeviceAddress(dev.device, &da);
+    p.shadow_address = queried_buffer_address(da.buffer);
     p.shadow_known.assign((size_t)((n >> kPageShift) + 63) / 64, 0);
     shadow_bytes += n;
     static int logged;
@@ -5423,7 +5433,7 @@ bool wbd_table_make(uint64_t bytes, WbdTable& t) {
                       true, t.buf, t.alloc, &map) && map) {
         VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
         da.buffer = t.buf;
-        t.address = vkGetBufferDeviceAddress(dev.device, &da);
+        t.address = queried_buffer_address(da.buffer);
         if (t.address) {
             t.map = (uint8_t*)map;
             t.bytes = n;
@@ -5630,7 +5640,7 @@ void memory_end_submission(VkCommandBuffer cmd, uint64_t part) {
             if (diff && p->shadow && p->address && p->mirror) {
                 VkBufferDeviceAddressInfo mda{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
                 mda.buffer = p->mirror;
-                const VkDeviceAddress mirror_address = vkGetBufferDeviceAddress(dev.device, &mda);
+                const VkDeviceAddress mirror_address = queried_buffer_address(mda.buffer);
                 // (a run not in whole words, as a copy of the game's may be: copied whole, its pages then unknown to the shadow)
                 odd.clear();
                 for (const VkBufferCopy& r : runs)

@@ -26,7 +26,7 @@ bool vma_init(PFN_vkGetInstanceProcAddr gipa) {
     f.vkGetInstanceProcAddr = gipa;
     f.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
     VmaAllocatorCreateInfo ci{};
-    ci.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT |
+    ci.flags = (dev.vk12.bufferDeviceAddress ? VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT : 0) |
                (dev.memory_budget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0);
     ci.physicalDevice = dev.physical;
     ci.device = dev.device;
@@ -262,6 +262,7 @@ uint64_t allocation_size(VmaAllocation allocation) {
 }
 bool create_buffer(uint64_t size, VkBufferUsageFlags usage, bool host_visible, VkBuffer& buffer,
                    VmaAllocation& allocation, void** mapped, bool dedicated) {
+    if (!dev.vk12.bufferDeviceAddress) usage &= ~VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size = size;
     bi.usage = usage;
@@ -281,6 +282,7 @@ bool create_buffer(uint64_t size, VkBufferUsageFlags usage, bool host_visible, V
 /// threads copy pages into it, the replay reads texture pages out of it and the GPU copies the rest from it)
 bool create_buffer_cached(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buffer, VmaAllocation& allocation,
                           void** mapped, bool dedicated) {
+    if (!dev.vk12.bufferDeviceAddress) usage &= ~VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size = size;
     bi.usage = usage;
@@ -322,6 +324,7 @@ void destroy_buffer(VkBuffer buffer, VmaAllocation allocation) {
     vmaDestroyBuffer(vma, buffer, allocation);
 }
 bool create_device_buffer(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buffer, VmaAllocation& allocation, bool dedicated) {
+    if (!dev.vk12.bufferDeviceAddress) usage &= ~VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size = size;
     bi.usage = usage;
@@ -335,6 +338,7 @@ bool create_device_buffer(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buf
 /// (longshot, RX_VK_MIRROR_SPARSE) A buffer with sparse residency and no memory: its blocks are bound one by one
 /// (vk_memory.cpp, sparse_mirror.h). req: its size, block (alignment) and memory types
 bool create_sparse_buffer(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buffer, VkMemoryRequirements& req) {
+    if (!dev.vk12.bufferDeviceAddress) usage &= ~VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.flags = VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
     bi.size = size;

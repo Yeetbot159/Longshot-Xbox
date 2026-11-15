@@ -647,9 +647,8 @@ bool create_device() {
              f12.shaderStorageBufferArrayNonUniformIndexing ? "yes" : "no",
              f12.runtimeDescriptorArray ? "yes" : "no", limits.maxPerStageDescriptorStorageBuffers,
              limits.maxDescriptorSetStorageBuffers, f.features.shaderInt64 ? "yes" : "no");
-        logf("vk: this renderer's guest shaders use PhysicalStorageBuffer addresses; the adapter has no "
-             "VK_KHR_buffer_device_address. No Xbox address-table fallback is implemented yet.");
-        return false;
+        logf("vk: no VK_KHR_buffer_device_address: starting in bound-buffer compatibility mode; "
+             "physical guest pointers and mesh compute fallback are disabled");
     }
     mesh.multiviewMeshShader = mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;   // (not used)
     dev.mesh_shader = dev.mesh_shader && mesh.meshShader && mesh.taskShader;

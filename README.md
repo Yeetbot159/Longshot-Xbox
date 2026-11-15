@@ -3,7 +3,7 @@
 **Longshot Xbox** is an experimental Xbox Series X|S Developer Mode port maintained in this repository by **Yeetbot159**. It adapts the original [Longshot project](https://git.magicbean.dev/MagicBeanDev/Longshot), a static recompilation of a Nintendo Switch 2 game, for Xbox's UWP app model.
 
 > [!WARNING]
-> **The game does not render on Xbox yet.** The launcher and console builder are prototypes. The renderer package includes Mesa Dozen, but the Xbox UWP graphics path currently lacks Vulkan buffer device addresses required by Longshot's guest shaders. An address-table shader translation path is not implemented. The Series S probe also reports no mesh-shader tier through its UWP D3D12 device. No Series S gameplay frame has been verified.
+> **The game does not render on Xbox yet.** The launcher and console builder are prototypes. When Vulkan buffer device addresses are unavailable, the renderer can now continue in a bound-buffer compatibility mode, but guest pointer accesses still need an address-table shader translation path. The Series S probe also reports no mesh-shader tier through its UWP D3D12 device, and the mesh compute fallback needs BDA. No Series S gameplay frame has been verified.
 
 This repository contains the Xbox-specific app, renderer packaging, builder, loader, probe, and integration changes. It does not contain the game, game keys, or game-derived files.
 
@@ -20,7 +20,7 @@ This repository contains the Xbox-specific app, renderer packaging, builder, loa
 
 ### Renderer limitation
 
-The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. Longshot's mesh-to-compute fallback also relies on buffer device addresses. The renderer now logs the adapter's storage-buffer descriptor-array features and limits to guide future shader lowering work; it still stops with a clear capability message when BDA is unavailable.
+The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. Longshot's mesh-to-compute fallback also relies on buffer device addresses. Without BDA, the renderer avoids those address-based paths and can proceed with ordinary descriptor-bound buffers; guest pointers not covered by an already-bound storage buffer remain unmapped, and mesh draws remain unavailable. An address-table shader translation path is still required for game rendering.
 
 The reported mesh-shader tier is for the current UWP/Dozen path. Microsoft documents native mesh-shader pipelines on Series X|S devkits through GDK; this UWP measurement does not establish the console silicon's full graphics capabilities.
 

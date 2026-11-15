@@ -536,7 +536,7 @@ uint64_t device_address(const BufferRef& r) {
     if (!r) return 0;
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
     da.buffer = r.buffer;
-    const VkDeviceAddress base = vkGetBufferDeviceAddress(dev.device, &da);
+    const VkDeviceAddress base = dev.vk12.bufferDeviceAddress ? vkGetBufferDeviceAddress(dev.device, &da) : 0;
     return base ? base + r.offset : 0;
 }
 
@@ -563,7 +563,8 @@ int actor_motion(VkCommandBuffer cmd, const Camera& cam, const float* before, ui
     if (off || skins.empty() || !make_actor_pipeline()) return 0;
     for (auto& b : s.pose_buffers)
         if (!b.buffer) {
-            if (!create_device_buffer(kPoseBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+            if (!create_device_buffer(kPoseBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                      (dev.vk12.bufferDeviceAddress ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0),
                                       b.buffer, b.memory))
                 return b = {}, 0;
             b.address = device_address({b.buffer, 0, kPoseBytes, 0});

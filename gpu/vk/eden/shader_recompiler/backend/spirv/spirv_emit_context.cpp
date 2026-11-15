@@ -1079,7 +1079,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
     const char* const gp_test{getenv("RX_VK_GP_TEST")};   // (1: the addressing model alone, 2: and the table's load, 3 or unset: all of it)
     const int gp_level{gp_test ? atoi(gp_test) : 3};
     // (the culling; a graphics stage with it hung the renderer at a load. RX_VK_NO_FOLLOW: none of it, as before)
-    static const bool no_follow{env_on("RX_VK_NO_FOLLOW")};
+    static const bool no_follow{env_on("RX_VK_NO_FOLLOW") || !profile.support_buffer_device_address};
     // (not the task and mesh stages: tried for the foliage, which it did not bring back)
     // (EvilOOT: vertex and fragment stages too, as the fallback only: an access no bound buffer holds read 0 there (Kokiri's
     // pond came out grey, not green). The pointer pass leaves graphics stages as they were, so what was found before still is,
