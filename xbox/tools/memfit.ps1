@@ -1,5 +1,7 @@
-# How much memory Longshot takes on a PC, as the Xbox would count it: the process's committed (private) memory plus
-# what it holds on the GPU (on the console both come out of one budget of about 5 GB). Runs the game without a window
+# How much memory Longshot takes on a PC, as the Xbox would count it. On the console the CPU's and the GPU's memory come
+# out of one budget of about 5 GB; on Windows the process's committed (private) memory already holds both, since every GPU
+# allocation is charged to the process's commit (gpu/vk/vk_texture.cpp's commit rule), so peak_private_mb is the figure to
+# hold against the console's limit; the GPU columns say how much of it is the renderer's. Runs the game without a window
 # on a copy of a game folder, with its own user folder, presses A through the title and a new game's intro, samples
 # every two seconds and ends the game after -Seconds.
 #
@@ -16,7 +18,7 @@ param(
     [int]$Preset = 1,
     [string]$Output = '1280x720',
     [string]$Presses = '',
-    [hashtable]$Env = @{}
+    [string[]]$Env = @()   # (NAME=VALUE, comma-separated: -Env RX_VK_IMAGE_PREALLOC=0,RX_VK_CAP_PREWARM=0)
 )
 $ErrorActionPreference = 'Stop'
 
@@ -39,7 +41,10 @@ $vars = @{
 }
 if ($MemoryMB) { $vars.HOS_MEMORY_MB = "$MemoryMB" }
 if ($VramMB) { $vars.RX_VK_VRAM_MB = "$VramMB" }
-foreach ($k in $Env.Keys) { $vars[$k] = $Env[$k] }
+foreach ($kv in $Env) {
+    $name, $value = $kv -split '=', 2
+    $vars[$name] = $value
+}
 
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = Join-Path $Game 'bin\longshot.exe'
@@ -64,9 +69,9 @@ function Get-GpuMB([int]$procId, [string]$kind) {
 }
 
 $csv = Join-Path $run 'samples.csv'
-'seconds,private_mb,working_set_mb,gpu_dedicated_mb,gpu_shared_mb,total_mb' | Set-Content $csv
+'seconds,private_mb,working_set_mb,gpu_dedicated_mb,gpu_shared_mb' | Set-Content $csv
 $start = Get-Date
-$peak = @{ private = 0; ws = 0; ded = 0; shared = 0; total = 0 }
+$peak = @{ private = 0; ws = 0; ded = 0; shared = 0 }
 while (-not $p.HasExited -and ((Get-Date) - $start).TotalSeconds -lt $Seconds) {
     Start-Sleep -Seconds 2
     try { $p.Refresh() } catch { break }
@@ -75,14 +80,12 @@ while (-not $p.HasExited -and ((Get-Date) - $start).TotalSeconds -lt $Seconds) {
     $ws = [int]($p.WorkingSet64 / 1MB)
     $ded = Get-GpuMB $p.Id 'Dedicated Usage'
     $sh = Get-GpuMB $p.Id 'Shared Usage'
-    $tot = $priv + $ded
     $t = [int]((Get-Date) - $start).TotalSeconds
-    "$t,$priv,$ws,$ded,$sh,$tot" | Add-Content $csv
+    "$t,$priv,$ws,$ded,$sh" | Add-Content $csv
     if ($priv -gt $peak.private) { $peak.private = $priv }
     if ($ws -gt $peak.ws) { $peak.ws = $ws }
     if ($ded -gt $peak.ded) { $peak.ded = $ded }
     if ($sh -gt $peak.shared) { $peak.shared = $sh }
-    if ($tot -gt $peak.total) { $peak.total = $tot }
 }
 $exited = $p.HasExited
 if (-not $exited) { Stop-Process -Id $p.Id -Force; $p.WaitForExit(10000) | Out-Null }
@@ -92,6 +95,6 @@ $shots = (Get-ChildItem (Join-Path $run 'shots') -Filter *.png -ErrorAction Sile
 $summary = "tag=$Tag memory_mb=$(if ($MemoryMB) { $MemoryMB } else { 'default' }) vram_mb=$(if ($VramMB) { $VramMB } else { 'default' }) " +
     "preset=$Preset output=$Output seconds=$Seconds exit=$(if ($exited) { $p.ExitCode } else { 'ended-by-script' }) " +
     "peak_private_mb=$($peak.private) peak_working_set_mb=$($peak.ws) peak_gpu_dedicated_mb=$($peak.ded) " +
-    "peak_gpu_shared_mb=$($peak.shared) peak_private_plus_dedicated_mb=$($peak.total) shots=$shots"
+    "peak_gpu_shared_mb=$($peak.shared) shots=$shots"
 $summary | Set-Content (Join-Path $run 'summary.txt')
 $summary
