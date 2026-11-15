@@ -637,6 +637,16 @@ bool create_device() {
         return false;
     }
     if (!f12.bufferDeviceAddress) {
+        // Longshot's Xbox address-table path is not implemented yet. Record the exact Vulkan
+        // storage-buffer indexing support available on the adapter so a console log can tell us
+        // whether the bounded-array probe has a Vulkan equivalent on Dozen.
+        const VkPhysicalDeviceLimits& limits = dev.props.limits;
+        logf("vk: address-table prerequisites (not implemented): storage-buffer dynamic indexing %s, nonuniform indexing %s, "
+             "runtime arrays %s, per-stage storage buffers %u, descriptor-set storage buffers %u, shader int64 %s",
+             f12.shaderStorageBufferArrayDynamicIndexing ? "yes" : "no",
+             f12.shaderStorageBufferArrayNonUniformIndexing ? "yes" : "no",
+             f12.runtimeDescriptorArray ? "yes" : "no", limits.maxPerStageDescriptorStorageBuffers,
+             limits.maxDescriptorSetStorageBuffers, f.features.shaderInt64 ? "yes" : "no");
         logf("vk: this renderer's guest shaders use PhysicalStorageBuffer addresses; the adapter has no "
              "VK_KHR_buffer_device_address. No Xbox address-table fallback is implemented yet.");
         return false;

@@ -828,6 +828,53 @@ void existing_heap_test(Gpu& g, uint8_t* mem, const char* label, ID3D12PipelineS
     R.add(label, fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
 }
 
+// Mesa Dozen's VK_EXT_external_memory_host path uses the newer Device13 API
+// with a one-byte probe size. Test that exact call: Device3's older diagnostic
+// heap API returning E_INVALIDARG does not establish whether Dozen can import
+// the guest allocation.
+void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12PipelineState* pso, ID3D12RootSignature* rs) {
+    com_ptr<ID3D12Device13> d13 = g.dev.try_as<ID3D12Device13>();
+    if (!d13) { R.add(label, "no ID3D12Device13"); return; }
+    for (uint64_t i = 0; i < MB; ++i) mem[i] = uint8_t(i * 7 + 3);
+    memset(mem + MB, 0, 2 * MB);
+    HRESULT hr = S_OK;
+    {
+        com_ptr<ID3D12Heap> heap_probe;
+        hr = d13->OpenExistingHeapFromAddress1(mem, 1, __uuidof(ID3D12Heap), heap_probe.put_void());
+    }
+    if (FAILED(hr)) { R.add(label, "OpenExistingHeapFromAddress1(size=1) " + hr_text(hr)); return; }
+    com_ptr<ID3D12Heap> heap;
+    hr = d13->OpenExistingHeapFromAddress1(mem, 16 * MB, __uuidof(ID3D12Heap), heap.put_void());
+    if (FAILED(hr)) { R.add(label, "OpenExistingHeapFromAddress1(size=16MB) " + hr_text(hr)); return; }
+    D3D12_RESOURCE_DESC bd{D3D12_RESOURCE_DIMENSION_BUFFER, 0, 16 * MB, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                           D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+    com_ptr<ID3D12Resource> buf;
+    hr = g.dev->CreatePlacedResource(heap.get(), 0, &bd, D3D12_RESOURCE_STATE_COMMON, nullptr, __uuidof(ID3D12Resource), buf.put_void());
+    if (FAILED(hr)) { R.add(label, "CreatePlacedResource " + hr_text(hr)); return; }
+    g.begin();
+    g.list->CopyBufferRegion(buf.get(), MB, buf.get(), 0, MB);
+    if (pso && rs) {
+        D3D12_RESOURCE_BARRIER b{D3D12_RESOURCE_BARRIER_TYPE_UAV};
+        g.list->ResourceBarrier(1, &b);
+        g.list->SetComputeRootSignature(rs);
+        g.list->SetPipelineState(pso);
+        g.list->SetComputeRootUnorderedAccessView(0, buf->GetGPUVirtualAddress() + 2 * MB);
+        g.list->Dispatch(16, 1, 1);
+    }
+    hr = g.run();
+    if (FAILED(hr)) { R.add(label, "GPU work " + hr_text(hr)); return; }
+    const bool copy_ok = memcmp(mem, mem + MB, MB) == 0;
+    std::string shader = "not run";
+    if (pso && rs) {
+        auto* o = reinterpret_cast<uint64_t*>(mem + 2 * MB);
+        const uint64_t lanes = o[0];
+        bool ok = lanes == 32 || lanes == 64;
+        for (uint64_t i = 1; i < 1024 && ok; ++i) ok = o[i] == i * 0x100000001ull + lanes;
+        shader = ok ? fmt("ok (wave of %llu)", (unsigned long long)lanes) : "wrong values";
+    }
+    R.add(label, fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
+}
+
 void probe_d3d12() {
     R.section("Direct3D 12");
     com_ptr<IDXGIFactory4> fac;
@@ -938,11 +985,17 @@ void probe_d3d12() {
     R.flush();
 
     uint8_t* plain = static_cast<uint8_t*>(pVirtualAlloc ? pVirtualAlloc(nullptr, 16 * MB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) : nullptr);
-    if (plain) existing_heap_test(g, plain, "host memory import (ordinary allocation)", pso.get(), rs.get());
+    if (plain) {
+        existing_heap_test(g, plain, "host memory import (ordinary allocation)", pso.get(), rs.get());
+        existing_heap_test_v13(g, plain, "Dozen host import API (ordinary allocation)", pso.get(), rs.get());
+    }
     R.flush();
     if (g_guest) {
         uint8_t* in = static_cast<uint8_t*>(pVirtualAlloc(g_guest + (100ull << 30), 16 * MB, MEM_COMMIT, PAGE_READWRITE));
-        if (in) existing_heap_test(g, in, "host memory import (inside the 512 GB window)", pso.get(), rs.get());
+        if (in) {
+            existing_heap_test(g, in, "host memory import (inside the 512 GB window)", pso.get(), rs.get());
+            existing_heap_test_v13(g, in, "Dozen host import API (inside the 512 GB window)", pso.get(), rs.get());
+        }
         else R.add("host memory import (inside the 512 GB window)", "commit failed");
     }
     R.flush();

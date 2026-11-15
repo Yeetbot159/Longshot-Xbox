@@ -13,7 +13,11 @@ app can start a child copy of itself. It did not test starting Python or clang, 
 validated on the console. Treat renderer launch and console building as experimental until those are tested on the
 target Xbox. The console's UWP D3D12 device reports shader model 6.4, while Mesa Dozen gates Vulkan buffer device
 addresses at 6.6; Longshot's current shaders require those addresses, so the renderer reports that capability gap
-rather than start the game. An address-table shader path is still needed. The D3D12 probe previously compiled a
+rather than start the game. An address-table shader path is still needed. The previous probe's Device3 host-heap call
+returned E_INVALIDARG, but Mesa Dozen uses the newer `ID3D12Device13::OpenExistingHeapFromAddress1` API. This probe
+now tests that exact call on ordinary memory and the reserved guest window, then verifies GPU reads and writes through
+the heap. The renderer logs Vulkan storage-buffer array indexing support and limits when BDA is missing, as input to
+the future lowering path. The D3D12 probe previously compiled a
 shader-model 6.6 shader against an adapter limited to 6.4; this package's probe source now builds its compute pipeline
 at 6.4 and checks bounded non-uniform SRV descriptor arrays for an address-table fallback. Its UWP device reports no
 mesh shader tier. Microsoft's public GDK sample documents mesh-shader pipelines on Series X|S devkits, so that probe

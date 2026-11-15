@@ -135,8 +135,12 @@ checks whether shader model 6.4 can create a pipeline with a bounded, non-unifor
 will guide a UWP-safe address-table lowering path; the current guest pipeline path still needs that work.
 
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
-probe source now uses 6.4 for that check. Its `OpenExistingHeapFromAddress` calls still return `E_INVALIDARG`, so the
-port also cannot assume zero-copy GPU access to the game's 512 GB virtual window. The renderer source compiles and
+probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExistingHeapFromAddress` test returned
+`E_INVALIDARG`, but Dozen uses `ID3D12Device13::OpenExistingHeapFromAddress1` with a one-byte size. The updated
+probe tests that exact API on ordinary and reserved-window memory and verifies GPU reads and writes through the
+resulting heap. Until that run is collected, zero-copy import into Dozen remains unverified. The renderer now also
+logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing; this checks one
+prerequisite for a future address-table lowering path, which is not implemented yet. The renderer source compiles and
 the package includes Mesa Dozen, but no Series S pipeline or frame has been verified.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,
