@@ -112,10 +112,24 @@ GPU memory every two seconds, the sum the console counts against its limit. Resu
 | Step | State |
 | --- | --- |
 | Probe app | Built; waiting for a run on a Series S |
-| Memory on PC | See below |
+| Memory on PC | Measured (below): over the console's budget as it stands |
 | UWP host layer (`host/uwp/`) | Not started: waits for the probe's import and memory answers |
 | Vulkan to Direct3D 12 layer (`gpu/vkd3d12/`) | Not started: waits for the probe's Direct3D 12 answers |
 | Game-module loader (`xbox/loader`) | Written; its test passes on a PC (14 checks). On the console: waits for the probe's `codeGeneration` answer |
 | Builder on the console (embedded CPython, clang and lld as libraries) | Designed (above); waits for the probe's answers on starting programs, CPU speed and the USB drive |
 
 The CPU benchmark on the PC this was written on (24 threads): one thread 259 ms, 24 threads at once 587 ms.
+
+### Memory on a PC (memfit.ps1, Minimum preset, 1280x720, title and attract mode, no window)
+
+| Settings | Exit | Committed | Working set | GPU dedicated | GPU shared |
+| --- | --- | --- | --- | --- | --- |
+| Defaults | ran | 12 439 MB | 6 593 MB | 5 537 MB | 1 517 MB |
+| Texture budget 1 GB (`RX_VK_VRAM_MB=1024`) | ran | 9 043 MB | 5 283 MB | 3 512 MB | 521 MB |
+| Game memory 6 GB (`HOS_MEMORY_MB=6144`), textures 1 GB | crashed at start (access violation) | | | | |
+| Game memory 8 GB (`HOS_MEMORY_MB=8192`), textures 1 GB | crashed at start (access violation) | | | | |
+
+A Game on the console gets about 5 GB for CPU and GPU together. With a 1 GB texture budget the game still touches
+about 5.3 GB of CPU memory and 3.5 GB of GPU memory, close to 9 GB, so it needs to come down by about half. The game
+crashes at start when its memory is set below the default, so the cuts have to come from what the host and renderer
+allocate rather than from the game's own heap. The probe's commit test gives the console's real limit.
