@@ -35,7 +35,7 @@ struct Result { double one_ms, all_ms; unsigned threads; };
 inline Result run() {
     using clock = std::chrono::steady_clock;
     Result r{};
-    r.threads = std::max(1u, std::thread::hardware_concurrency());
+    r.threads = (std::max)(1u, std::thread::hardware_concurrency());   // (parenthesized: windows.h's max macro)
     work(1);   // (warm)
     auto t0 = clock::now();
     volatile uint64_t keep = work(2);

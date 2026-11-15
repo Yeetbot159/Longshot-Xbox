@@ -31,7 +31,8 @@ bool vma_init(PFN_vkGetInstanceProcAddr gipa) {
     ci.physicalDevice = dev.physical;
     ci.device = dev.device;
     ci.instance = dev.instance;
-    ci.vulkanApiVersion = VK_API_VERSION_1_3;
+    // (xbox: Dozen's device is 1.2, and VMA would call 1.3's maintenance4 functions on a 1.3 one)
+    ci.vulkanApiVersion = std::min<uint32_t>(dev.props.apiVersion, VK_API_VERSION_1_3);
     ci.pVulkanFunctions = &f;
     ci.preferredLargeHeapBlockSize = 64ull << 20;   // (64 MB blocks: Eglantine found 256 MB ones wasted VRAM)
     return vmaCreateAllocator(&ci, &vma) == VK_SUCCESS;

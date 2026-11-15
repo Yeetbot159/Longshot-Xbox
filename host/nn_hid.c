@@ -741,7 +741,7 @@ static void pads_read(uint64_t *buttons, int32_t stick[4]) {
         was = n;
         sdl_pads = n;
     }
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(LONGSHOT_UWP)
     xinput_get = XInputGetState;
 #endif
     /* Polling XInput alongside SDL causes double-reads and conflicting button mappings when Steam Input

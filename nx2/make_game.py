@@ -60,6 +60,11 @@ LINUX, CROSS = not _toolchain.windows(), _toolchain.windows() and os.name != "nt
 # (SDL2.dll is sdl2-compat: it loads SDL3.dll from beside the exe. Left out of bin\ since v2.0.0, it said "Failed loading SDL3
 # library" three times and no controller worked: Discord #bug-reporting, 11-08)
 BESIDE = ["longshot", "longshot_vk.so", "libSDL2-2.0.so.0"] if LINUX else ["longshot.exe", "longshot_vk.dll", "SDL2.dll", "SDL3.dll", "wgpu_native.dll"]
+# (xbox, LONGSHOT_XBOX=1: the game module for the Xbox app, xbox/app, which loads it from the game folder beside image.bin; the
+# renderer and the rest are the app package's)
+XBOX = os.environ.get("LONGSHOT_XBOX", "").strip().lower() not in ("", "0", "false", "off", "no")
+if XBOX:
+    BESIDE = ["longshot_game.dll"]
 LANGUAGES = [("en-US", "English (US)"), ("en-GB", "English (UK)"), ("fr", "French (France)"), ("fr-CA", "French (Canada)"), ("de", "German"),
              ("it", "Italian"), ("es", "Spanish (Spain)"), ("es-419", "Spanish (Latin America)"), ("pt-BR", "Portuguese (Brazil)"), ("nl", "Dutch"),
              ("pl", "Polish"), ("ru", "Russian"), ("ja", "Japanese"), ("ko", "Korean"), ("zh-Hans", "Chinese (Simplified)"),
@@ -1410,6 +1415,8 @@ def prepare_skipped(a, environ=None):
         return "LONGSHOT_NO_PREPARE is set"
     if CROSS:   # (longshot.exe can't run here, and under Wine it would prepare for this PC's GPU, not the one that plays it)
         return "a Windows game built on Linux prepares them on the PC it runs on"
+    if XBOX:   # (a module for the Xbox app, not a program: and the console's GPU is not this PC's)
+        return "the Xbox's game module prepares them on the console"
     return None
 
 
@@ -2514,7 +2521,7 @@ def main(a=None):
         script = os.path.join(ROOT, "builder", "linux", "longshot-folder")
         launcher = script if os.environ.get("LONGSHOT_TOOLS") and os.path.isfile(script) else None
     else:
-        launcher = launcher if os.path.isfile(launcher) else None
+        launcher = launcher if os.path.isfile(launcher) and not XBOX else None
     game_dir = os.path.join(out, "bin") if launcher else out
     os.makedirs(game_dir, exist_ok=True)
     ffmpeg_dlls = [] if LINUX else sorted(f for f in os.listdir(built) if f.endswith(".dll") and f.startswith(("av", "sw")))

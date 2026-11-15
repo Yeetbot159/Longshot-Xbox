@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define MKWVK_API_VERSION 23
+#define MKWVK_API_VERSION 24
 enum { HOS_OPT_CHEAT_HEARTS = 32, HOS_OPT_CHEAT_FLIGHT, HOS_OPT_CHEAT_ACTION, HOS_OPT_CHEAT_CAMERA, HOS_OPT_CHEAT_SPEED };
 /* (longshot) the Gameplay tab's Text size (host/oot_text_size.c): 0 the game's, 1 110%, 2 125%, 3 150%, 4 175% */
 enum { HOS_OPT_TEXT_SIZE = 10 };
@@ -317,9 +317,10 @@ __attribute__((visibility("default"))) const MkwVkRenderer *mkwvk_init(const Mkw
 #endif
 #endif
 
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(LONGSHOT_UWP)
 /* (linux) what start() is given in place of a window handle (host/posix/display_sdl.c): the window makes the
-   surface (SDL_Vulkan_CreateSurface: X11 or Wayland) and says its size in pixels */
+   surface (SDL_Vulkan_CreateSurface: X11 or Wayland) and says its size in pixels. (xbox) Also a UWP build's
+   (LONGSHOT_UWP, host/uwp/display_uwp.c): the app makes the surface on its CoreWindow */
 #define MKWVK_WINDOW_VERSION 3
 typedef struct MkwVkWindow {
     uint32_t version;   /* MKWVK_WINDOW_VERSION */

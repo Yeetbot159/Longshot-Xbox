@@ -95,7 +95,9 @@ extern const char *hos_romfs_dir, *hos_user_dir;
    Security Policy > User Rights Assignment; log off and on after): without it this logs why and uses normal pages. */
 int hos_large_pages;   /* (hos_mem.c: freed pages are not discarded then) */
 #if defined(_WIN32) && !defined(A64_MEM_ZERO)
+#ifndef LONGSHOT_UWP   /* (the app container's: libwindowsapp, nx2/build.py) */
 #pragma comment(lib, "advapi32.lib")   /* (the token privilege calls) */
+#endif
 static void *reserve_large(SIZE_T size) {
     HANDLE token;
     if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &token)) return NULL;

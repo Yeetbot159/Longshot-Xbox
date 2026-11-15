@@ -23,8 +23,11 @@ foreach ($dll in 'libc++.dll', 'libunwind.dll') { Copy-Item (Join-Path $bin $dll
 & (Join-Path $bin 'clang.exe') --target=x86_64-w64-mingw32 -O2 -shared (Join-Path $here 'test_tls.c') -o (Join-Path $out 'test_tls.dll')
 if ($LASTEXITCODE) { throw 'test_tls.dll did not build' }
 
+cl /nologo /O2 /MT /W4 /Fo"$out\\" (Join-Path $here '..\..\app\tls_slot.c') /LD /link /OUT:"$out\longshot_tls.dll" /IMPLIB:"$out\longshot_tls.lib"
+if ($LASTEXITCODE) { throw 'longshot_tls.dll did not build' }
+
 cl /nologo /O2 /W4 /MT /utf-8 /Fo"$out\\" (Join-Path $here 'test_loader.c') (Join-Path $here '..\pe_loader.c') /link /OUT:"$out\test_loader.exe"
 if ($LASTEXITCODE) { throw 'test_loader.exe did not build' }
 
-& (Join-Path $out 'test_loader.exe') (Join-Path $out 'test_mod.dll') (Join-Path $out 'test_tls.dll')
+& (Join-Path $out 'test_loader.exe') (Join-Path $out 'test_mod.dll') (Join-Path $out 'test_tls.dll') (Join-Path $out 'longshot_tls.dll')
 exit $LASTEXITCODE

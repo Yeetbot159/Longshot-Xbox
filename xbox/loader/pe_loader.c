@@ -88,6 +88,7 @@ struct pel_module {
     int attached;
     HMODULE dlls[PEL_MAX_DLLS];
     int ndlls;
+    pel_tls_slot *tls;
 };
 
 typedef struct {
@@ -253,14 +254,39 @@ static int bind_imports(pel_module *m, const pel_options *opt, char *err, size_t
     return 1;
 }
 
-static int check_tls(pel_module *m, char *err, size_t errlen) {
+static int setup_tls(pel_module *m, const pel_options *opt, char *err, size_t errlen) {
     IMAGE_DATA_DIRECTORY *d = dir(m, IMAGE_DIRECTORY_ENTRY_TLS);
     if (!d) return 1;
     IMAGE_TLS_DIRECTORY64 *t = (IMAGE_TLS_DIRECTORY64 *)(m->base + d->VirtualAddress);
-    uint64_t data = t->EndAddressOfRawData - t->StartAddressOfRawData + t->SizeOfZeroFill;
-    if (data) return fail(err, errlen, "the module has %llu bytes of thread-local data: build it with -femulated-tls", (unsigned long long)data), 0;
-    uint64_t index = t->AddressOfIndex - (uint64_t)(uintptr_t)m->base;
-    if (t->AddressOfIndex && in_image(m, index, 4)) memset(m->base + index, 0, 4);
+    const uint64_t base = (uint64_t)(uintptr_t)m->base, raw = t->EndAddressOfRawData - t->StartAddressOfRawData,
+                   data = raw + t->SizeOfZeroFill, index = t->AddressOfIndex - base;
+    if (!data) {
+        if (t->AddressOfIndex && in_image(m, index, 4)) memset(m->base + index, 0, 4);
+        return 1;
+    }
+    pel_tls_slot *slot = opt ? opt->tls : NULL;
+    if (!slot)
+        return fail(err, errlen, "the module has %llu bytes of thread-local data: build it with -femulated-tls, or give the loader a TLS slot",
+                    (unsigned long long)data), 0;
+    if (slot->taken) return fail(err, errlen, "the TLS slot is taken by another module"), 0;
+    if (data > slot->capacity)
+        return fail(err, errlen, "the module has %llu bytes of thread-local data; the TLS slot holds %zu", (unsigned long long)data,
+                    slot->capacity), 0;
+    if (!t->AddressOfIndex || !in_image(m, index, 4) || t->EndAddressOfRawData < t->StartAddressOfRawData ||
+        (raw && !in_image(m, t->StartAddressOfRawData - base, raw)))
+        return fail(err, errlen, "bad TLS directory"), 0;
+    /* (the linker puts a TLS template with nothing else in its section among the read-only data) */
+    if (!mem_protect(slot->template_data, (size_t)data, PAGE_READWRITE))
+        return fail(err, errlen, "cannot write the TLS slot's template (%lu)", GetLastError()), 0;
+    memcpy(slot->template_data, m->base + (t->StartAddressOfRawData - base), (size_t)raw);
+    memset((uint8_t *)slot->template_data + raw, 0, (size_t)t->SizeOfZeroFill);
+    const DWORD i = (DWORD)slot->index;
+    memcpy(m->base + index, &i, 4);
+    /* (this thread's block, made when the slot DLL loaded: the TEB's ThreadLocalStoragePointer) */
+    void **blocks = *(void ***)((uint8_t *)NtCurrentTeb() + 0x58);
+    if (blocks && blocks[i]) memcpy(blocks[i], slot->template_data, (size_t)data);
+    slot->taken = 1;
+    m->tls = slot;
     return 1;
 }
 
@@ -316,7 +342,7 @@ static pel_module *load(const reader *r, const pel_options *opt, char *err, size
     pel_module *m = (pel_module *)calloc(1, sizeof *m);
     if (!m) return fail(err, errlen, "out of memory"), NULL;
     if (map_image(m, r, opt, err, errlen) && relocate(m, err, errlen) && bind_imports(m, opt, err, errlen) &&
-        check_tls(m, err, errlen) && protect_sections(m, err, errlen) && register_unwind(m, err, errlen)) {
+        setup_tls(m, opt, err, errlen) && protect_sections(m, err, errlen) && register_unwind(m, err, errlen)) {
         tls_callbacks(m, DLL_PROCESS_ATTACH);
         DWORD entry = m->nt->OptionalHeader.AddressOfEntryPoint;
         if (!entry || ((DllMain_t)(void *)(m->base + entry))((HINSTANCE)m->base, DLL_PROCESS_ATTACH, NULL)) {
@@ -417,6 +443,7 @@ void pel_unload(pel_module *m) {
         tls_callbacks(m, DLL_PROCESS_DETACH);
     }
     if (m->table && sys.delete_table) sys.delete_table(m->table);
+    if (m->tls) m->tls->taken = 0;
     for (int i = 0; i < m->ndlls; ++i)
         if (sys.free_library) sys.free_library(m->dlls[i]);
     if (m->base && sys.free_) sys.free_(m->base, 0, MEM_RELEASE);

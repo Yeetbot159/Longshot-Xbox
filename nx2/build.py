@@ -72,6 +72,15 @@ PGO = os.environ.get("RX_PGO", "")
 # 2026-11-14: one way to build it, with this PC's CPU and the committed play profile)
 LINUX = not toolchain.windows()   # (longshot: RX_TARGET=windows on Linux builds the Windows game, with llvm-mingw)
 POSIX = os.path.join(kit.HERE, "..", "host", "posix")
+# (xbox) LONGSHOT_XBOX=1: the game as longshot_game.dll for the Xbox app (xbox/app loads it with xbox/loader), with
+# llvm-mingw: host/uwp in place of the desktop's window, sound and shell calls, the consoles' CPU (Zen 2), thread-locals
+# emulated (the app's loader runs no native TLS), and no renderer of its own (the app package has it)
+UWP = os.environ.get("LONGSHOT_XBOX", "").strip().lower() not in ("", "0", "false", "off", "no")
+UWP_HOST = os.path.join(kit.HERE, "..", "host", "uwp")
+if UWP and not toolchain.mingw():
+    sys.exit("build: LONGSHOT_XBOX=1 builds with llvm-mingw: set LONGSHOT_MINGW to its folder")
+if UWP:
+    os.environ.setdefault("RX_MARCH", "znver2")   # (the Series S and X's CPU)
 SYSROOT = os.environ.get("LONGSHOT_SYSROOT", "")
 EXE = "longshot" if LINUX else "longshot.exe"
 VK_LIB = "longshot_vk.so" if LINUX else "longshot_vk.dll"
@@ -117,8 +126,9 @@ def check_vk_symbols(so):
     return False
 
 def target():
-    """toolchain.native_target(), with the sysroot on Linux"""
-    return toolchain.native_target() + (["--sysroot=" + SYSROOT] if LINUX and SYSROOT else [])
+    """toolchain.native_target(), with the sysroot on Linux (xbox: and the module's own flags)"""
+    return toolchain.native_target() + (["--sysroot=" + SYSROOT] if LINUX and SYSROOT else []) + \
+        (["-femulated-tls", "-DLONGSHOT_UWP"] if UWP else [])
 
 
 def no_throttle(handle=None):
@@ -157,6 +167,12 @@ def HOT_ORDER():
 
 HOST_LIBS = ["-lpthread", "-ldl", "-lm"] if LINUX else \
     ["-lwinhttp", "-luser32", "-lwinmm", "-ladvapi32", "-lole32", "-lshell32", "-lgdi32", "-ldbghelp"]
+# (xbox) the app container's import library alone, so the link fails on a desktop function host/uwp does not stand in for
+# (/ignore:4217: host/uwp's own definitions of functions the headers declare imported, which is the point). Not -static:
+# the C++ runtime's DLLs are the app package's, as libc++abi keeps native thread-locals
+UWP_LINK = ["-fuse-ld=lld"] + ["-Wl,-Xlink=/nodefaultlib:" + l for l in ("libcmt", "oldnames", "libvcruntime", "msvcrt")]
+UWP_LIBS = ["-nodefaultlibs", "-lc++", "-lunwind", "-lmingw32", "-lmingwex", "-lucrt", "-l:libwinpthread.a", "-lwindowsapp",
+            "-lclang_rt.builtins-x86_64", "-Wl,-Xlink=/ignore:4217"]
 GPU = os.path.join(kit.HERE, "..", "gpu")
 # FFmpeg (libavcodec's VP8/VP9 decoders, swscale) for nn::codec's video decoders (host/nn_video.c): the static build
 # in the Eglantine clone's package cache
@@ -1099,9 +1115,12 @@ def main():
         have_wgpu = os.path.isfile(os.path.join(WGPU, "include", "webgpu", "webgpu.h"))
         host_srcs = sorted(os.path.join(HOST, f) for f in os.listdir(HOST) if f.endswith(".c") and (f != "pgo_rt.c" or PGO == "gen")
                            and not (LINUX and f in ("display.c", "mf_av1.c", "rx_nowgpu.c")) and (f != "rx_nowgpu.c" or not have_wgpu)
+                           and not (UWP and f == "display.c")
                            and (f != "dav1d_av1.c" or dav1d_windows()))
         if LINUX:   # (the window on SDL2, the Win32 calls on POSIX, no Media Foundation and no WebGPU renderer)
             host_srcs += [os.path.join(POSIX, f) for f in ("win32_posix.c", "display_sdl.c", "linux_stubs.c", "prof.c")]
+        if UWP:   # (the app's CoreWindow, sound and shell through its table; the game's main called by the app)
+            host_srcs += [os.path.join(UWP_HOST, f) for f in ("display_uwp.c", "win32_uwp.c", "uwp_entry.c")]
     else:
         srcs += [os.path.join(NX2_RT, "eden_shim.c"), write_info(out)]
     if kit.env_on("RX_VK_ONLY"):   # (no lift needed: the back end alone)
@@ -1156,6 +1175,8 @@ def main():
                                 if f.endswith(".h"))
     if LINUX:
         host_deps += b"".join(open(os.path.join(POSIX, f), "rb").read() for f in sorted(os.listdir(POSIX)) if f.endswith(".h"))
+    if UWP:
+        host_deps += b"".join(open(os.path.join(UWP_HOST, f), "rb").read() for f in sorted(os.listdir(UWP_HOST)) if f.endswith(".h"))
     host_deps += open(os.path.join(GPU, "vk", "vk_api.h"), "rb").read()   # (the renderer ABI used by host/rx_backend.c)
     host_deps += open(os.path.join(GPU, "vk", "dlss_math.h"), "rb").read()   # (host/rx_backend.c's DLSS jitter)
     host_deps += open(os.path.join(GPU, "vk", "compat", "longshot_env.h"), "rb").read()   # (env_on: the switches' one rule)
@@ -1171,6 +1192,7 @@ def main():
               (["-I" + os.path.join(FFMPEG, "include")] if FFMPEG else []) +
               (FFMPEG_LX[0] if LINUX and FFMPEG_LX else []) +
               ([stamp_def] if os.path.basename(s) == "hos_main.c" else []) +
+              (["-Dmain=hos_uwp_game_main"] if UWP and os.path.basename(s) == "hos_main.c" else []) +
               (["-I" + ZSTD] if os.path.basename(s) in ZSTD_HOST else []) +
               (dav1d_fl if os.path.basename(s) in ("nn_video.c", "dav1d_av1.c") else []),
               host_deps + (zstd_api if os.path.basename(s) in ZSTD_HOST else b"")) for s in host_srcs]
@@ -1190,8 +1212,8 @@ def main():
                                                             "-DZSTD_LEGACY_SUPPORT=0", "-DZSTD_MULTITHREAD=0"], obj_dir, "zstd_",
                           tp_deps)
     # the renderer (C++20, NDEBUG: no asserts in it or suyu), when a wgpu-native release is there
-    wgpu = a.standalone and not LINUX and os.path.isfile(os.path.join(WGPU, "include", "webgpu", "webgpu.h"))
-    if a.standalone and not wgpu and not LINUX:
+    wgpu = a.standalone and not LINUX and not UWP and os.path.isfile(os.path.join(WGPU, "include", "webgpu", "webgpu.h"))
+    if a.standalone and not wgpu and not LINUX and not UWP:
         print("no wgpu-native at %s (WGPU_NATIVE): building without the renderer" % WGPU)
     if wgpu:
         cxx = toolchain.need(toolchain.find("clang++"))
@@ -1209,7 +1231,9 @@ def main():
     vk_jobs = []
     vk_headers, spirv_headers, vma_headers = vulkan_headers()
     build_vk = a.standalone and vk_headers and spirv_headers and vma_headers
-    if a.standalone and not build_vk:
+    if UWP and not kit.env_on("RX_VK_ONLY"):   # (xbox: the renderer is the app package's, built alone: RX_VK_ONLY=1, no game)
+        build_vk = False
+    elif a.standalone and not build_vk:
         # (was silent: the exe linked, RX_BACKEND=vulkan then fell through to WebGPU / a stub, black window)
         missing = [n for n, p in (("Vulkan", vk_headers), ("SPIR-V", spirv_headers), ("VMA", vma_headers)) if not p]
         print("no headers for %s (missing %s). Set RX_CPM to a CPM cache, or LONGSHOT_VULKAN_HEADERS / "
@@ -1466,6 +1490,22 @@ def main():
         if sdl and os.path.exists(sdl):
             import shutil
             shutil.copyfile(sdl, os.path.join(out, "libSDL2-2.0.so.0"))
+    elif a.standalone and not vk_only and UWP:
+        dll = os.path.join(out, "longshot_game.dll")   # (+ longshot_game.map; the app finds it at <drive>\Longshot\work\build)
+        t = time.time()
+        r = subprocess.run([cc] + toolchain.native_target() + UWP_LINK +
+                           ["-shared", "-o", dll] + linker("/map:" + dll[:-4] + ".map") + ["@" + rsp] + HOT_ORDER() +
+                           # (Media Foundation and bcrypt are the app container's too: libwindowsapp.a has them)
+                           ([os.path.join(FFMPEG, "lib", l + ".lib") for l in FFMPEG_LIBS] + ["-lmfuuid", "-lstrmiids"] if FFMPEG else []) +
+                           ([os.path.join(dav1d_windows(), "lib", "libdav1d.a")] if dav1d_windows() else []) + UWP_LIBS,
+                           capture_output=True, text=True)
+        undefined = sorted({l.strip() for l in (r.stdout + r.stderr).splitlines() if "undefined symbol" in l})
+        if r.returncode:
+            print("link FAILED (%.0fs), %d undefined symbols: a desktop function host/uwp does not stand in for yet, or a library"
+                  % (time.time() - t, len(undefined)))
+            print("\n".join(undefined[:80]) if undefined else (r.stdout + r.stderr)[-3000:])
+            return 1
+        print("linked %s: %d MB (%.0fs)" % (dll, os.path.getsize(dll) >> 20, time.time() - t))
     elif a.standalone and not vk_only:
         exe = os.path.join(out, "longshot.exe")   # (+ longshot.map: crash offsets -> f_<guest address>)
         t = time.time()
@@ -1520,6 +1560,10 @@ def main():
             link = [toolchain.need(toolchain.find("clang++"))] + target() + ["-fuse-ld=lld", "-shared", "-o", vdll] + \
                 linker("-Map=" + vdll + ".map") + ["-Wl,-Bsymbolic", "-Wl,--gc-sections", "-static-libstdc++", "-static-libgcc", "@" + vrsp] + \
                 ([ngx_library(NGX_SDK, True)] if NGX_SDK else []) + ["-ldl", "-lpthread", "-lm"]
+        elif UWP:   # (xbox: loaded by the app's loader as the game module is; user32 and kernel32 last, for what the app
+            # container lacks (vk_hangdump.cpp's IsBadReadPtr), which the app answers with the game module's stand-ins: xbox/app/modules.h)
+            link = [cc] + toolchain.native_target() + UWP_LINK + ["-shared", "-o", vdll] + linker("/map:" + vdll[:-4] + ".map") + \
+                ["@" + vrsp] + UWP_LIBS + ["-luser32", "-lkernel32"]
         else:   # (RX_VK_PGO=gen: no profile library, as in the game's link; host/pgo_rt.c writes the counters)
             link = [cc] + toolchain.native_target() + toolchain.native_link() + \
                 ["-shared", "-o", vdll] + linker("/map:" + vdll[:-4] + ".map") + ["@" + vrsp, "-luser32"] + \

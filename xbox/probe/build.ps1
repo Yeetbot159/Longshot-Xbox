@@ -13,9 +13,9 @@ $sdkInc = Join-Path (Split-Path (Split-Path (Get-SdkBin))) '..\Include' | Resolv
 $ver = Split-Path (Split-Path (Get-SdkBin)) -Leaf
 $cppwinrt = Join-Path $sdkInc "$ver\cppwinrt"
 
-cl /nologo /std:c++20 /EHsc /O2 /MT /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE /I $cppwinrt `
-    /Fo"$obj\\" (Join-Path $PSScriptRoot 'probe.cpp') `
-    /link /SUBSYSTEM:WINDOWS /APPCONTAINER /OUT:"$pkg\probe.exe" `
+cl /nologo /std:c++20 /EHsc /O2 /Zi /MT /W3 /permissive- /utf-8 /DUNICODE /D_UNICODE /I $cppwinrt `
+    /Fo"$obj\\" /Fd"$obj\\" (Join-Path $PSScriptRoot 'probe.cpp') `
+    /link /SUBSYSTEM:WINDOWS /APPCONTAINER /OUT:"$pkg\probe.exe" /DEBUG /PDB:"$obj\probe.pdb" /MAP:"$obj\probe.map" `
     WindowsApp.lib d3d12.lib d3d11.lib dxgi.lib d2d1.lib dwrite.lib
 if ($LASTEXITCODE) { throw "probe.exe did not build ($LASTEXITCODE)" }
 cl /nologo /std:c++20 /EHsc /O2 /MT /utf-8 /Fo"$obj\\" (Join-Path $PSScriptRoot 'bench_pc.cpp') /link /OUT:"$XboxOut\bench_pc.exe"

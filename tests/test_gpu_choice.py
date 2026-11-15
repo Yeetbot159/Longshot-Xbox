@@ -28,11 +28,13 @@ def main():
     pick = pick[:pick.index("\n}\n")]
     for need, why in (("menu_init()", "the saved choice is read before it is used"),
                       ("menu_set_gpu_count((int)valid_gpus.size())", "the row offers only the usable GPUs"),
-                      ("p.apiVersion >= VK_API_VERSION_1_3", "only Vulkan 1.3 GPUs are listed"),
+                      ("p.apiVersion >= kVulkanNeeded", "only Vulkan 1.3 GPUs are listed (1.2 in the Xbox build: Dozen)"),
                       ('getenv("RX_VK_DEVICE")', "RX_VK_DEVICE wins over the row"),
                       ("gpu_choice::menu_device(opts.gpu_device, (int)valid_gpus.size())", "the row's choice is taken")):
         if need not in pick:
             raise SystemExit("pick_device: %s is missing (%s)" % (need, why))
+    if "#else\nconstexpr uint32_t kVulkanNeeded = VK_API_VERSION_1_3;" not in main_src:
+        raise SystemExit("vk_main.cpp: kVulkanNeeded is not 1.3 outside the Xbox build")
     if pick.index("menu_init()") > pick.index("gpu_choice::menu_device"):
         raise SystemExit("pick_device reads the GPU row before menu_init")
     if pick.index('getenv("RX_VK_DEVICE")') > pick.index("gpu_choice::menu_device"):

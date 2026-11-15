@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
+#include <exception>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -96,6 +97,12 @@ public:
         if (folder_.empty()) return;
         write(folder_ + L"\\probe.txt", text());
         write(folder_ + L"\\probe.json", json());
+    }
+    // (on the way down: the lock may be held by the thread that failed, so it is only tried)
+    void stopped(const std::string& why) {
+        std::unique_lock<std::mutex> l(m_, std::try_to_lock);
+        lines_.push_back("  STOPPED in \"" + section_ + "\": " + why);
+        if (!folder_.empty()) write(folder_ + L"\\probe.txt", text());
     }
 
 private:
@@ -1014,30 +1021,55 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
 
     void Run() {
         window_.Activate();
-        try { R.set_folder(std::wstring(winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path())); } catch (...) {}
+        R.section("Longshot Xbox probe");
+        R.note("Results: LocalState\\probe.txt and probe.json (Device Portal, File explorer).");
+        R.flush();
         std::thread worker([] {
-            winrt::init_apartment();
-            R.section("Longshot Xbox probe");
-            R.note("Results: LocalState\\probe.txt and probe.json (Device Portal, File explorer).");
-            probe_system();
-            probe_imports();
-            probe_storage();
-            probe_audio_input();
-            probe_threads();
-            probe_memory();
-            probe_codegen();
-            probe_builder();
-            probe_d3d12();
-            probe_commit();
-            R.section("done");
-            R.flush();
+            try {
+                winrt::init_apartment();
+                probe_system();
+                probe_imports();
+                probe_storage();
+                probe_audio_input();
+                probe_threads();
+                probe_memory();
+                probe_codegen();
+                probe_builder();
+                probe_d3d12();
+                probe_commit();
+                R.section("done");
+                R.flush();
+            } catch (...) {
+                R.stopped(what());
+            }
         });
         worker.detach();
-        init_graphics();
+        try {
+            init_graphics();
+        } catch (...) {
+            R.note("The screen could not be set up, the probe goes on without it: " + what());
+            R.flush();
+            ctx_ = nullptr;
+        }
         while (true) {
             window_.Dispatcher().ProcessEvents(CoreProcessEventsOption::ProcessAllIfPresent);
-            scroll();
+            try {
+                scroll();
+            } catch (...) {}
             draw();
+        }
+    }
+
+    // (the exception being handled, as text)
+    static std::string what() {
+        try {
+            throw;
+        } catch (winrt::hresult_error const& e) {
+            return hr_text(e.code()) + " " + narrow(e.message());
+        } catch (std::exception const& e) {
+            return e.what();
+        } catch (...) {
+            return "an unknown exception";
         }
     }
 
@@ -1130,6 +1162,29 @@ private:
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmd, int) {
     if (cmd && wcsstr(cmd, L"--child")) return 7;   // (probe_builder starting a program)
-    CoreApplication::Run(make<App>());
+    winrt::init_apartment();   // (CoreApplication refuses a main thread that is not in the multi-threaded apartment)
+    try {
+        R.set_folder(std::wstring(winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path()));
+    } catch (...) {}
+    std::set_terminate([] {
+        std::string why = "std::terminate";
+        if (std::current_exception()) {
+            try {
+                throw;
+            } catch (winrt::hresult_error const& e) {
+                why += ": " + hr_text(e.code()) + " " + narrow(e.message());
+            } catch (std::exception const& e) {
+                why += std::string(": ") + e.what();
+            } catch (...) {}
+        }
+        R.stopped(why);
+        TerminateProcess(GetCurrentProcess(), 3);
+    });
+    try {
+        CoreApplication::Run(make<App>());
+    } catch (winrt::hresult_error const& e) {
+        R.stopped("the app ended with " + hr_text(e.code()) + " " + narrow(e.message()));
+        return 1;
+    }
     return 0;
 }

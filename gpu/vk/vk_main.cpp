@@ -145,11 +145,21 @@ bool has_extension(const std::vector<VkExtensionProperties>& all, const char* na
     return false;
 }
 
+// (xbox) The console's one Vulkan driver, Mesa's Dozen on Direct3D 12, says 1.2: it has the 1.3 features used here
+// (create_device asks for dynamic rendering, synchronization2 and timeline semaphores, and gives up without them) but
+// not all of 1.3 (maintenance4)
+#ifdef LONGSHOT_UWP
+constexpr uint32_t kVulkanNeeded = VK_API_VERSION_1_2;
+#else
+constexpr uint32_t kVulkanNeeded = VK_API_VERSION_1_3;
+#endif
+
 bool create_instance() {
     uint32_t version = VK_API_VERSION_1_0;
     if (vkEnumerateInstanceVersion) vkEnumerateInstanceVersion(&version);
-    if (version < VK_API_VERSION_1_3) {
-        logf("vk: the Vulkan loader is %u.%u: 1.3 is needed", VK_VERSION_MAJOR(version), VK_VERSION_MINOR(version));
+    if (version < kVulkanNeeded) {
+        logf("vk: the Vulkan loader is %u.%u: %u.%u is needed", VK_VERSION_MAJOR(version), VK_VERSION_MINOR(version),
+             VK_VERSION_MAJOR(kVulkanNeeded), VK_VERSION_MINOR(kVulkanNeeded));
         return false;
     }
 #ifdef _WIN32
@@ -214,7 +224,7 @@ bool pick_device() {
         logf("vk: device %u: %s, Vulkan %u.%u, driver %#x, type %d, id %04x:%04x", i, p.deviceName,
              VK_API_VERSION_MAJOR(p.apiVersion), VK_API_VERSION_MINOR(p.apiVersion), p.driverVersion, (int)p.deviceType,
              p.vendorID, p.deviceID);
-        if (p.apiVersion >= VK_API_VERSION_1_3) {
+        if (p.apiVersion >= kVulkanNeeded) {
             valid_gpus.push_back(i);
             gpu_device_names.push_back(p.deviceName);
             gpu_device_cards.push_back({p.vendorID, p.deviceID});   // (the row's saved card: gpu_choice.h card_id)
@@ -1146,7 +1156,7 @@ std::atomic<size_t> prep_guess[3]{};
 std::atomic<bool> prep_skip[3]{};
 std::atomic<bool> prep_running{false}, prep_finished{false};
 HANDLE prep_ended = nullptr;
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(LONGSHOT_UWP)
 const MkwVkWindow* prep_window = nullptr;   // (its size)
 #endif
 void prep_progress(size_t done, size_t total) {
@@ -1160,7 +1170,7 @@ bool screen_wanted() {
 /// The window's size now (0x0: minimized, or unknown)
 void window_size(uint32_t* w, uint32_t* h) {
     *w = *h = 0;
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(LONGSHOT_UWP)
     RECT r{};
     if (main_window && GetClientRect(main_window, &r)) *w = (uint32_t)(r.right - r.left), *h = (uint32_t)(r.bottom - r.top);
 #else
@@ -1422,7 +1432,7 @@ static void choose_present_queue() {
 
 bool open_window_surface(bool log_failure) {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(LONGSHOT_UWP)
     VkWin32SurfaceCreateInfoKHR si{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
     si.hinstance = GetModuleHandleA(nullptr);
     si.hwnd = main_window;
@@ -1510,7 +1520,7 @@ int start(void* hwnd) {
         pipeline_cache_play();   // (play begins: what is made from now on goes into the play files)
         return 1;
     }
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(LONGSHOT_UWP)
     if (!open_window_surface(true)) return 0;
     RECT r{};
     GetClientRect((HWND)hwnd, &r);

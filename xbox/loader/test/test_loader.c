@@ -66,13 +66,15 @@ static IMAGE_NT_HEADERS64 *headers_of(void *base) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3) {
-        fprintf(stderr, "usage: test_loader <test_mod.dll> <test_tls.dll>\n");
+    setvbuf(stdout, NULL, _IONBF, 0);
+    if (argc < 4) {
+        fprintf(stderr, "usage: test_loader <test_mod.dll> <test_tls.dll> <longshot_tls.dll>\n");
         return 2;
     }
-    wchar_t mod[MAX_PATH], tls[MAX_PATH];
+    wchar_t mod[MAX_PATH], tls[MAX_PATH], slot_path[MAX_PATH];
     MultiByteToWideChar(CP_UTF8, 0, argv[1], -1, mod, MAX_PATH);
     MultiByteToWideChar(CP_UTF8, 0, argv[2], -1, tls, MAX_PATH);
+    MultiByteToWideChar(CP_UTF8, 0, argv[3], -1, slot_path, MAX_PATH);
     char err[512];
     pel_options opt = {resolve, NULL, 1};
 
@@ -103,6 +105,37 @@ int main(int argc, char **argv) {
     pel_module *bad = pel_load_file(tls, &opt, err, sizeof err);
     CHECK(bad == NULL && strstr(err, "thread-local"), "a module with thread-local data is refused (%s)", bad ? "loaded" : err);
     if (bad) pel_unload(bad);
+
+    /* (a TLS slot: longshot_tls.dll, loaded by Windows) */
+    HMODULE slot_dll = LoadLibraryW(slot_path);
+    typedef void (*slot_fn)(ULONG *, void **, SIZE_T *);
+    slot_fn get_slot = slot_dll ? (slot_fn)(void *)GetProcAddress(slot_dll, "longshot_tls_slot") : NULL;
+    CHECK(get_slot != NULL, "longshot_tls.dll loads and exports its slot");
+    if (get_slot) {
+        pel_tls_slot slot = {0};
+        get_slot(&slot.index, &slot.template_data, &slot.capacity);
+        CHECK(slot.capacity >= 64 * 1024 && slot.template_data, "the slot: index %lu, %zu bytes", slot.index, slot.capacity);
+        pel_options with_slot = {resolve, NULL, 1, &slot};
+        pel_module *t1 = pel_load_file(tls, &with_slot, err, sizeof err);
+        CHECK(t1 != NULL, "with the slot, the module with thread-local data loads%s%s", t1 ? "" : ": ", t1 ? "" : err);
+        if (t1) {
+            tls_bump = (int0_t)pel_symbol(t1, "tls_value");
+            int a = tls_bump(), b = tls_bump(), c = 0;
+            HANDLE th = CreateThread(NULL, 0, other_thread, &c, 0, NULL);
+            WaitForSingleObject(th, INFINITE);
+            CloseHandle(th);
+            CHECK(a == 106 && b == 107 && c == 106, "its thread-locals: this thread %d %d, a new thread %d (106 107 106)", a, b, c);
+            pel_module *t2 = pel_load_file(tls, &with_slot, err, sizeof err);
+            CHECK(t2 == NULL && strstr(err, "taken"), "a second module is refused the slot (%s)", t2 ? "loaded" : err);
+            if (t2) pel_unload(t2);
+            pel_unload(t1);
+            CHECK(!slot.taken, "unloading frees the slot");
+        }
+        slot.capacity = 16;
+        pel_module *cramped = pel_load_file(tls, &with_slot, err, sizeof err);
+        CHECK(cramped == NULL && strstr(err, "slot holds"), "a slot too small is refused (%s)", cramped ? "loaded" : err);
+        if (cramped) pel_unload(cramped);
+    }
 
     pel_options plain = {NULL, NULL, 0};
     pel_module *unresolved = pel_load_file(mod, &plain, err, sizeof err);

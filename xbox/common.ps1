@@ -3,6 +3,7 @@
 
 $ErrorActionPreference = 'Stop'
 $XboxRoot = $PSScriptRoot
+$RepoRoot = Split-Path $XboxRoot -Parent
 $XboxOut = Join-Path $XboxRoot 'out'
 $CertSubject = 'CN=LongshotXbox'
 

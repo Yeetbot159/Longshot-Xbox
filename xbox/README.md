@@ -1,8 +1,15 @@
 # Longshot on Xbox Series X|S (Developer Mode)
 
 An experimental port of Longshot to Xbox consoles in Developer Mode, as a UWP app, the way the Xbox Emulation Hub's
-ports are installed. **It does not play the game yet.** What is here now: a probe that measures what the console gives
-a UWP game, so the port can be built to fit, and the loader the app will run the game module with.
+ports are installed. **It does not play the game yet: there is no picture.** What is here now:
+
+- **Longshot** (`xbox/app`), the app a player installs: it finds their game files on a USB drive, has a **Series S**
+  and a **Series X** mode, estimates the build on this console, and starts a built game module with its sound,
+  keyboard, clipboard and links. The renderer (Vulkan on Direct3D 12) is the missing part.
+- The **Xbox host layer** (`host/uwp`) and the **Xbox build** of the game (`LONGSHOT_XBOX=1`): the game as a module
+  that names no desktop DLL.
+- The **loader** (`xbox/loader`) the app runs the module with, and the **probe** (`xbox/probe`) that measures what the
+  console gives a UWP game.
 
 ## The rule that shapes everything
 
@@ -14,6 +21,113 @@ The plan is the emulators' arrangement taken one step further:
   builder's tools: no game.
 - **The game module** is built from the player's own copy of the game, on the console itself (below) or on their PC
   with the Longshot Builder, and kept on their USB drive. The app loads it from there with its own loader.
+
+## The app and its two modes
+
+`Longshot.msix` (`xbox/app`, built by `xbox\app\build.ps1` and by CI, released on `v*` tags) opens on one screen, run
+with the controller (D-pad, A):
+
+| Row | What it does |
+| --- | --- |
+| Console | The model, from `GetGamingDeviceModelInformation`, and the memory the console gives the app |
+| Mode | **Auto** (the console's own), **Series S** or **Series X**; written into `longshot_options.ini` in the app's LocalState at once |
+| Game files | The folders on the USB drives holding `romfs\` and `exefs\main` (two levels down) |
+| Build | Measures this console's CPU and estimates the build in the chosen mode |
+| Play | Loads `<drive>\Longshot\work\build\longshot_game.dll` and starts the game |
+
+The modes use the consoles' published hardware specifications as starting points, not as promises about what a UWP
+app can use. Series S has an 8-core Zen 2 CPU, a 20-CU RDNA 2 GPU rated at 4 TFLOPS, and 10 GB GDDR6 (8 GB at
+224 GB/s and 2 GB at 56 GB/s). Series X has an 8-core Zen 2 CPU, a 52-CU RDNA 2 GPU rated at 12 TFLOPS, and 16 GB
+GDDR6 (10 GB at 560 GB/s and 6 GB at 336 GB/s). These are whole-console figures; the OS and app model affect what
+Longshot can allocate. ([Series S specs](https://news.xbox.com/en-us/2020/09/09/xbox-series-s/), [Series X specs](https://news.xbox.com/en-us/2020/03/16/xbox-series-x-tech/))
+
+Microsoft documents `expandedResources` as granting access to Game Mode CPU resources and at least a 4 GB memory
+partition on Xbox. That is not a build-process working-set guarantee: `AppMemoryUsageLimit` can begin lower and grow,
+and graphics allocations count against the same practical budget. We measure the limit at runtime and must profile the
+compiler and linker on each console before setting job counts or claiming the build fits. ([Xbox UWP resources](https://learn.microsoft.com/en-us/previous-versions/windows/uwp/xbox-apps/system-resource-allocation), [expandedResources](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations), [expected app limit](https://learn.microsoft.com/en-us/uwp/api/windows.system.memorymanager.expectedappmemoryusagelimit))
+
+**The console builder is not implemented yet.** The current launcher can look for external command-line tools and call
+`CreateProcessW`; that does not establish that an Xbox UWP Game can start those tools. The actual builder must run
+inside the app process (or use a console-supported packaged execution model), bound its memory while compiling and
+linking, and put generated scratch files on USB. The planned approach is to embed CPython and use clang/lld as
+libraries, compile a small number of translation units at a time, and measure peak app memory on Series S and X.
+Until that exists, the launcher only estimates build time when its external tool path is unavailable; it cannot yet
+build the game on the console.
+
+The package declares `removableStorage` for the player's USB drive. It does not declare `broadFileSystemAccess`, which
+Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://learn.microsoft.com/en-us/uwp/extension-sdks/uwp-limitations-on-xbox))
+
+| | Series S | Series X |
+| --- | --- | --- |
+| Output | 1920x1080 | 2560x1440 (the game's own) |
+| Quality preset | Minimum (`quality_preset=1`) | Low (`quality_preset=2`) |
+| Frame rate | 60 (`frame_rate_cap=0`) | 60 |
+| Texture budget | 768 MB (`RX_VK_VRAM_MB`) | 1.5 GB |
+| Image pool at start | off (`RX_VK_IMAGE_PREALLOC=0`) | off |
+| Files compiled at once by the builder | 1 | 2 |
+
+`xbox\app\test\run.ps1` checks the portable parts on a PC (21 checks): the model ids, the modes' choice, the options
+file kept intact but for the mode's lines, the estimate, and the drive search.
+
+## The game on the console: the app, the module and the platform table
+
+A UWP app may not call the desktop's window, sound and shell functions. Of the 304 Windows functions a built
+Longshot imports, 227 are in the app container's import library and 77 are not (`python -I xbox\tools\uwp_gap.py`):
+59 window, cursor, clipboard and raw-input calls of user32, winmm's `waveOut` sound, `ShellExecute`, `MessageBox`,
+a crash dump, two processor-group calls. Nearly all are in `host/display.c` and `host/nn_audio.c`.
+
+- **`host/uwp/uwp_platform.h`**: the table the app gives the module. The window's size and events, the keyboard,
+  the clipboard, links, messages, sound (one 16-bit PCM stream), the folders, the console's model and memory limit.
+- **`host/uwp/display_uwp.c`**: the window, in place of `host/display.c` (as `host/posix/display_sdl.c` is on Linux).
+  It starts the renderer with the window bridge (`MkwVkWindow`, now for UWP builds too: `MKWVK_API_VERSION` 24) and
+  passes on size, focus, typed text and the app's closing. No mouse: the controller plays.
+- **`host/uwp/win32_uwp.c`**: the 77 functions, defined in the module so its link names no desktop DLL. `waveOut`
+  plays through the app's XAudio2, keeping `waveOut`'s rules (`WHDR_DONE` polled, as `nn_audio.c` uses it); message
+  boxes are drawn over the game by the app; links open in the console's browser; the desktop's windows don't exist.
+- **`host/uwp/uwp_entry.c`**: the module's exports, `longshot_uwp_set_platform` and `longshot_uwp_main` (the game's
+  `main`, compiled under another name).
+- **`xbox/app/platform.cpp`**: the app's side: CoreWindow events into the table, XAudio2, the WinRT clipboard and
+  launcher.
+
+`host\uwp\test\run.ps1` checks `win32_uwp.c` against a stand-in app (34 checks) and links it against the UWP import
+library alone, so a desktop function that isn't replaced fails the link.
+
+### Building the module
+
+`LONGSHOT_XBOX=1` makes `nx2/build.py` build `longshot_game.dll` for the app instead of `longshot.exe`, with llvm-mingw:
+the consoles' Zen 2 (`RX_MARCH=znver2` unless given), emulated thread-locals, `LONGSHOT_UWP`, `host/uwp` in place of
+`host/display.c`, and a link against `libwindowsapp.a` alone (plus the C and C++ runtimes, whose DLLs the app
+carries). No renderer is built: the app package has it.
+
+    set LONGSHOT_XBOX=1
+    set LONGSHOT_MINGW=<llvm-mingw folder>
+    python -I nx2\make_game.py --romfs <dump>\romfs --exefs <dump>\exefs --out <folder> --work <drive>\Longshot\work --no-prepare-shaders
+
+## Graphics: Vulkan on Direct3D 12
+
+The renderer (`gpu/vk`) calls 165 Vulkan functions, 72 of them commands, and leans on buffer device addresses
+(`PhysicalStorageBuffer` in its shaders), push descriptors, dynamic rendering, extended dynamic state 3, mesh
+shaders, conditional rendering and timeline semaphores. A UWP app on the console has Direct3D 12 and no Vulkan.
+
+Two ways to give it Vulkan there:
+
+- **Mesa's Dozen** (`src/microsoft/vulkan`, MIT): a Vulkan driver on Direct3D 12, with Mesa's own SPIR-V to DXIL
+  compiler (no DXC needed at run time). It already does most of the 165 functions. What it lacks for this renderer
+  (buffer device addresses, mesh shaders, parts of extended dynamic state 3) the renderer must do without on the
+  console, which it has to anyway at shader model 6.4 / feature level 11.0 if that is what the probe finds. Needs a
+  Mesa build for UWP (meson; its few desktop calls replaced).
+- **A layer of our own** (`gpu/vkd3d12`): the 165 functions written for this renderer alone. Smaller, but all of it
+  new.
+
+The plan is Dozen first, built in CI for UWP, with a PC check on the RTX/Radeon desktop (Dozen runs there too). The
+probe's Direct3D 12 section decides how much of the renderer's feature set survives.
+
+How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,
+`spirv_to_dxil.dll` and `dxil.dll`): 151 of its 162 Windows functions are in the app container's library. The 11
+that are not are its desktop presentation (GDI's `CreateDIBSection`, `StretchBlt` and five more, `GetDC`,
+`GetClientRect`), `SHGetFolderPathA` for its cache folder and `GetFileVersionInfoSizeW`. The presentation is the part
+to replace anyway (a swap chain on the CoreWindow, `CreateSwapChainForCoreWindow`); the other two are a folder and a
+version check.
 
 ## Building the game on the console
 
@@ -112,9 +226,11 @@ GPU memory every two seconds, the sum the console counts against its limit. Resu
 | Step | State |
 | --- | --- |
 | Probe app | Built; waiting for a run on a Series S |
+| Launcher app with the Series S / Series X modes (`xbox/app`) | Built (`Longshot.msix`); its PC test passes (21 checks). Not yet run on a console |
 | Memory on PC | Measured (below): over the console's budget as it stands |
-| UWP host layer (`host/uwp/`) | Not started: waits for the probe's import and memory answers |
-| Vulkan to Direct3D 12 layer (`gpu/vkd3d12/`) | Not started: waits for the probe's Direct3D 12 answers |
+| UWP host layer (`host/uwp/`) | Written; its PC test passes (34 checks, linked against the UWP import library alone) |
+| The game as a module (`LONGSHOT_XBOX=1`) | See "Building the module" |
+| Vulkan on Direct3D 12 | Not started: Mesa's Dozen first (above); waits for the probe's Direct3D 12 answers |
 | Game-module loader (`xbox/loader`) | Written; its test passes on a PC (14 checks). On the console: waits for the probe's `codeGeneration` answer |
 | Builder on the console (embedded CPython, clang and lld as libraries) | Designed (above); waits for the probe's answers on starting programs, CPU speed and the USB drive |
 
