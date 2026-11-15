@@ -1,0 +1,3 @@
+LIBRARY host.dll
+EXPORTS
+    host_add
