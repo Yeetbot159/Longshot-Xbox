@@ -65,6 +65,7 @@ jobs:
       - name: Verify both signatures
         shell: pwsh
         run: |
+          Import-Certificate -FilePath xbox\out\LongshotXbox.cer -CertStoreLocation Cert:\CurrentUser\TrustedPeople | Out-Null
           . .\xbox\common.ps1
           $bin = Get-SdkBin
           & (Join-Path $bin 'signtool.exe') verify /pa xbox\out\Longshot.msix
