@@ -33,6 +33,8 @@
 #include <thread>
 #include <vector>
 
+#include "bench.h"
+
 using namespace winrt;
 using namespace winrt::Windows::ApplicationModel::Core;
 using namespace winrt::Windows::UI::Core;
@@ -563,6 +565,14 @@ void probe_codegen() {
             R.add("640 MB for code", fmt("allocation failed (%lu)", GetLastError()));
         }
     }
+    // (loaded code needs its unwind tables registered, or an exception through it ends the app; LLVM maps files it reads)
+    using RtlAddFunctionTable_t = BOOLEAN(WINAPI*)(PRUNTIME_FUNCTION, DWORD, DWORD64);
+    auto add_table = reinterpret_cast<RtlAddFunctionTable_t>(sym(L"ntdll.dll", "RtlAddFunctionTable"));
+    if (!add_table) add_table = kfn<RtlAddFunctionTable_t>("RtlAddFunctionTable");
+    R.add("RtlAddFunctionTable", add_table ? "found" : "not found");
+    R.add("CreateFileMappingFromApp / MapViewOfFileFromApp",
+          fmt("%s / %s", kfn<FARPROC>("CreateFileMappingFromApp") ? "found" : "not found", kfn<FARPROC>("MapViewOfFileFromApp") ? "found" : "not found"));
+    R.add("CreateProcessW (would let a builder run clang as a program)", kfn<FARPROC>("CreateProcessW") ? "found" : "not found");
     try {
         std::wstring local(winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path());
         std::wstring from = std::wstring(winrt::Windows::ApplicationModel::Package::Current().InstalledLocation().Path()) + L"\\dxil.dll";
@@ -583,7 +593,74 @@ void probe_codegen() {
     R.flush();
 }
 
-// ---- 8. Direct3D 12 ----------------------------------------------------------------------------------------------
+// ---- 8. building on the console --------------------------------------------------------------------------------------
+// A builder on the console lifts and compiles the game from the player's own files on the USB drive: how fast the CPU
+// is next to a PC (the same benchmark as bench_pc.exe), whether the app may start a program (clang as a program rather
+// than a library), and how fast the USB drive reads and writes (the build's work folder would live there).
+
+void probe_builder() {
+    R.section("building on the console");
+    auto b = bench::run();
+    R.add("CPU benchmark", fmt("one thread %.0f ms; %u threads at once %.0f ms (bench_pc.exe gives a PC's)", b.one_ms, b.threads, b.all_ms));
+    R.flush();
+
+    wchar_t self[MAX_PATH];
+    DWORD n = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    using CreateProcessW_t = BOOL(WINAPI*)(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCWSTR,
+                                           LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+    auto cp = kfn<CreateProcessW_t>("CreateProcessW");
+    if (!n || !cp) {
+        R.add("start a program", cp ? "own path unknown" : "CreateProcessW not found");
+    } else {
+        std::wstring cmd = L"\"" + std::wstring(self) + L"\" --child";
+        STARTUPINFOW si{sizeof si};
+        PROCESS_INFORMATION pi{};
+        if (cp(self, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 10000);
+            DWORD code = 0;
+            GetExitCodeProcess(pi.hProcess, &code);
+            R.add("start a program (the probe itself)", fmt("started, exit code %lu (7 expected)", code));
+            CloseHandle(pi.hProcess);
+            CloseHandle(pi.hThread);
+        } else {
+            R.add("start a program (the probe itself)", fmt("refused (%lu)", GetLastError()));
+        }
+    }
+    R.flush();
+
+    const wchar_t* dir = L"E:\\LongshotProbe";
+    CreateDirectoryW(dir, nullptr);
+    std::wstring file = std::wstring(dir) + L"\\speed.bin";
+    HANDLE h = CreateFile2(file.c_str(), GENERIC_WRITE, 0, CREATE_ALWAYS, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        R.add("USB drive speed", fmt("cannot write E:\\LongshotProbe (%lu)", GetLastError()));
+        R.flush();
+        return;
+    }
+    std::vector<uint8_t> buf(8 * MB, 0xA5);
+    LARGE_INTEGER f, a, c;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&a);
+    DWORD done = 0;
+    bool ok = true;
+    for (int i = 0; i < 64 && ok; ++i) ok = WriteFile(h, buf.data(), DWORD(buf.size()), &done, nullptr) && done == buf.size();
+    FlushFileBuffers(h);
+    CloseHandle(h);
+    QueryPerformanceCounter(&c);
+    double write_s = double(c.QuadPart - a.QuadPart) / f.QuadPart;
+    h = CreateFile2(file.c_str(), GENERIC_READ, 0, OPEN_EXISTING, nullptr);
+    QueryPerformanceCounter(&a);
+    for (int i = 0; i < 64 && ok && h != INVALID_HANDLE_VALUE; ++i) ok = ReadFile(h, buf.data(), DWORD(buf.size()), &done, nullptr) && done == buf.size();
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+    QueryPerformanceCounter(&c);
+    double read_s = double(c.QuadPart - a.QuadPart) / f.QuadPart;
+    DeleteFileW(file.c_str());
+    RemoveDirectoryW(dir);
+    R.add("USB drive, 512 MB written / read", ok ? fmt("%.0f MB/s / %.0f MB/s (the read may come from the cache)", 512 / write_s, 512 / read_s) : "I/O failed");
+    R.flush();
+}
+
+// ---- 9. Direct3D 12 ----------------------------------------------------------------------------------------------
 
 com_ptr<IDxcCompiler3> g_dxc;
 
@@ -895,7 +972,7 @@ void probe_d3d12() {
     R.flush();
 }
 
-// ---- 9. how much memory the CPU can commit and touch (last: it may end the app) ----------------------------------
+// ---- 10. how much memory the CPU can commit and touch (last: it may end the app) ----------------------------------
 
 void probe_commit() {
     R.section("CPU commit limit (256 MB steps, every page touched)");
@@ -949,6 +1026,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
             probe_threads();
             probe_memory();
             probe_codegen();
+            probe_builder();
             probe_d3d12();
             probe_commit();
             R.section("done");
@@ -1050,7 +1128,8 @@ private:
 
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmd, int) {
+    if (cmd && wcsstr(cmd, L"--child")) return 7;   // (probe_builder starting a program)
     CoreApplication::Run(make<App>());
     return 0;
 }
