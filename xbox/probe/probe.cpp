@@ -727,6 +727,20 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )HLSL";
 
+// The Series S UWP probe reports shader model 6.4, so Longshot cannot use
+// ResourceDescriptorHeap directly. Check whether a bounded descriptor table
+// with a non-uniform index can still be used for a future address-table path.
+const char* kComputeDescriptorArray = R"HLSL(
+ByteAddressBuffer resources[4] : register(t0);
+RWByteAddressBuffer output : register(u0);
+[RootSignature("DescriptorTable(SRV(t0, numDescriptors=4)), UAV(u0)")]
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint slot = NonUniformResourceIndex(id.x & 3);
+    output.Store(id.x * 4, resources[slot].Load(0));
+}
+)HLSL";
+
 const char* kMesh = R"HLSL(
 struct V { float4 p : SV_Position; };
 [RootSignature("RootFlags(0)")]
@@ -908,6 +922,17 @@ void probe_d3d12() {
         if (SUCCEEDED(hr)) hr = dev->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), pso.put_void());
         R.add("compute pipeline", hr_text(hr));
         if (FAILED(hr)) pso = nullptr;
+    }
+    if (auto cs = compile(kComputeDescriptorArray, L"main", L"cs_6_4", "cs_6_4 bounded non-uniform SRV array")) {
+        com_ptr<ID3D12RootSignature> array_rs;
+        com_ptr<ID3D12PipelineState> array_pso;
+        HRESULT hr = dev->CreateRootSignature(0, cs->GetBufferPointer(), cs->GetBufferSize(), __uuidof(ID3D12RootSignature),
+                                              array_rs.put_void());
+        D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
+        pd.pRootSignature = array_rs.get();
+        pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
+        if (SUCCEEDED(hr)) hr = dev->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), array_pso.put_void());
+        R.add("bounded non-uniform SRV array pipeline", hr_text(hr));
     }
     compile(kCompute, L"main", L"cs_6_6", "DXC-only cs_6_6 (bindless ResourceDescriptorHeap; adapter reports max 6.4)");
     R.flush();

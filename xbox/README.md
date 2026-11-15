@@ -122,13 +122,17 @@ Two ways to give it Vulkan there:
   new.
 
 The CI workflow now builds `longshot_vk.dll` as a standalone UWP renderer and packages it with the Mesa Dozen runtime.
-The Series S probe reports feature level 11.0, shader model 6.4, wave operations, and 64-bit shader operations, but no
-mesh shaders. Dozen exposes Vulkan buffer device addresses only when the D3D12 shader model is at least 6.6
+The Series S probe reports feature level 11.0, shader model 6.4, wave operations, and 64-bit shader operations, but its
+UWP D3D12 device reports mesh shader tier 0. Microsoft's public GDK sample documents a native mesh-shader pipeline on
+Series X|S devkits; this probe therefore describes the current UWP/Dozen API path, not the console silicon or GDK path
+([Microsoft's Simple Mesh Shader sample](https://learn.microsoft.com/en-us/samples/microsoft/xbox-gdk-samples/simplemeshshader/)).
+Dozen exposes Vulkan buffer device addresses only when the D3D12 shader model is at least 6.6
 ([upstream Dozen capability checks](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/dbbd251b6f00db68c1e9f0b7e8504b3b4278eaac/src/microsoft/vulkan/dzn_device.c));
 this console reports 6.4, so Dozen will not expose the address feature these guest shaders require. Longshot's existing
 mesh-to-compute fallback also requires buffer device addresses, and cannot solve that. The renderer now stops with a
-specific capability message instead of reaching shader pipeline creation and failing later. The next renderer step is
-an address-table shader path for the 6.4 adapter; pipeline work remains blocked on that path.
+specific capability message instead of reaching shader pipeline creation and failing later. The updated probe also
+checks whether shader model 6.4 can create a pipeline with a bounded, non-uniform SRV descriptor array. That result
+will guide a UWP-safe address-table lowering path; the current guest pipeline path still needs that work.
 
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
 probe source now uses 6.4 for that check. Its `OpenExistingHeapFromAddress` calls still return `E_INVALIDARG`, so the
@@ -238,7 +242,7 @@ GPU memory every two seconds, the sum the console counts against its limit. Resu
 
 | Step | State |
 | --- | --- |
-| Probe app | Series S report received. A follow-up probe corrects the compute pipeline test to use the reported shader model 6.4 |
+| Probe app | Series S report received. Follow-up probes test the shader-model 6.4 compute pipeline and bounded non-uniform SRV arrays |
 | Launcher and builder tools (`xbox/app`) | Launcher package includes Python, dependencies, llvm-mingw and a one-job, 3 GB build limit. Console execution is unverified |
 | Memory on PC | Measured (below): over the console's budget as it stands |
 | UWP host layer (`host/uwp/`) | Written; its PC test passes (34 checks, linked against the UWP import library alone) |

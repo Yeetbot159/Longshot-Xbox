@@ -11,10 +11,13 @@ This prerelease contains two game-free packages signed by the included `Longshot
 The Series S probe run confirmed that generated code can execute, a 512 GB address range can be reserved, and the
 app can start a child copy of itself. It did not test starting Python or clang, and the renderer has not yet been
 validated on the console. Treat renderer launch and console building as experimental until those are tested on the
-target Xbox. The console reports shader model 6.4, while Mesa Dozen gates Vulkan buffer device addresses at 6.6;
-Longshot's current shaders require those addresses, so the renderer will report that capability gap rather than start
-the game. An address-table shader path is still needed. The D3D12 probe previously compiled a shader-model 6.6 shader
-against an adapter limited to 6.4; this package's probe source now builds its compute pipeline at 6.4.
+target Xbox. The console's UWP D3D12 device reports shader model 6.4, while Mesa Dozen gates Vulkan buffer device
+addresses at 6.6; Longshot's current shaders require those addresses, so the renderer reports that capability gap
+rather than start the game. An address-table shader path is still needed. The D3D12 probe previously compiled a
+shader-model 6.6 shader against an adapter limited to 6.4; this package's probe source now builds its compute pipeline
+at 6.4 and checks bounded non-uniform SRV descriptor arrays for an address-table fallback. Its UWP device reports no
+mesh shader tier. Microsoft's public GDK sample documents mesh-shader pipelines on Series X|S devkits, so that probe
+result describes this UWP/Dozen path and not the console hardware's full GDK capability.
 
 The packages contain no game files or data derived from a game. The included certificate is public and is required
 only to trust/install these sideloaded packages. Set the app type to **Game** in Dev Home when collecting useful
