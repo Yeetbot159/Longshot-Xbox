@@ -69,10 +69,16 @@ if ($IncludeTools) {
     Copy-Item (Join-Path $PythonHome 'python.exe') $py
     Copy-Item (Join-Path $PythonHome 'python3*.dll') $py
     Copy-Item (Join-Path $PythonHome 'vcruntime140*.dll') $py
-    Copy-Item -Recurse (Join-Path $PythonHome 'DLLs') $py
-    Copy-Item -Recurse (Join-Path $PythonHome 'Lib') $py
+    foreach ($directory in 'DLLs', 'Lib') {
+        $source = Join-Path $PythonHome $directory
+        $destination = Join-Path $py $directory
+        New-Item -ItemType Directory -Force $destination | Out-Null
+        Copy-Item -Recurse -Force (Join-Path $source '*') $destination
+    }
     if (Test-Path (Join-Path $PythonVenv 'Lib\site-packages')) {
-        Copy-Item -Recurse -Force (Join-Path $PythonVenv 'Lib\site-packages\*') (Join-Path $py 'Lib\site-packages')
+        $site = Join-Path $py 'Lib\site-packages'
+        New-Item -ItemType Directory -Force $site | Out-Null
+        Copy-Item -Recurse -Force (Join-Path $PythonVenv 'Lib\site-packages\*') $site
     }
 
     # 2. llvm-mingw

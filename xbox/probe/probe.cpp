@@ -289,6 +289,7 @@ void probe_storage() {
     }
     list_dir(L"E:\\", "E:\\ (Win32)");
     list_dir(L"D:\\", "D:\\ (Win32)");
+    list_dir(L"D:\\Drives", "D:\\Drives (Win32)");
     try {
         auto folders = winrt::Windows::Storage::KnownFolders::RemovableDevices().GetFoldersAsync().get();
         std::string names;
@@ -897,7 +898,9 @@ void probe_d3d12() {
     load_dxc();
     com_ptr<ID3D12RootSignature> rs;
     com_ptr<ID3D12PipelineState> pso;
-    if (auto cs = compile(kComputeRootUav, L"main", L"cs_6_6", "compute cs_6_6 (int64, wave ops)")) {
+    // The measured adapter supports shader model 6.4. Compiling a 6.6 shader succeeds in DXC but the adapter
+    // rejects its pipeline, which only says that the requested shader model is too new.
+    if (auto cs = compile(kComputeRootUav, L"main", L"cs_6_4", "compute cs_6_4 (int64, wave ops)")) {
         HRESULT hr = dev->CreateRootSignature(0, cs->GetBufferPointer(), cs->GetBufferSize(), __uuidof(ID3D12RootSignature), rs.put_void());
         D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
         pd.pRootSignature = rs.get();
@@ -906,7 +909,7 @@ void probe_d3d12() {
         R.add("compute pipeline", hr_text(hr));
         if (FAILED(hr)) pso = nullptr;
     }
-    compile(kCompute, L"main", L"cs_6_6", "compute cs_6_6 (bindless ResourceDescriptorHeap)");
+    compile(kCompute, L"main", L"cs_6_6", "DXC-only cs_6_6 (bindless ResourceDescriptorHeap; adapter reports max 6.4)");
     R.flush();
 
     uint8_t* plain = static_cast<uint8_t*>(pVirtualAlloc ? pVirtualAlloc(nullptr, 16 * MB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) : nullptr);

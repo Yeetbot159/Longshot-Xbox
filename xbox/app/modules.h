@@ -5,7 +5,8 @@
 //   LoadLibrary*, GetProcAddress, FreeLibrary, GetModuleHandle*, GetModuleFileName*: these modules' own, so the game's
 //     LoadLibrary("longshot_vk.dll") and the renderer's LoadLibrary("vulkan-1.dll") load by hand too; vulkan-1.dll is
 //     Dozen (vulkan_dzn.dll), its vk_icdGetInstanceProcAddr given out as vkGetInstanceProcAddr, no Vulkan loader between
-//   a DLL the app answers itself (add_virtual: DirectComposition, xbox/app/dcomp_shim.cpp)
+//   a DLL the app answers itself (add_virtual: DirectComposition, xbox/app/dcomp_shim.cpp; Shell32 and Version are
+//     handled here for Dozen's LocalState cache and optional file-version queries)
 //   the desktop's window, sound and shell functions: the game module's stand-ins (host/uwp/win32_uwp.c,
 //     longshot_uwp_win32), once it is loaded
 //   the rest: the system's, or the package's (libc++.dll, dxil.dll); a desktop function that is in none of these
@@ -23,6 +24,7 @@ namespace longshot_xbox::modules {
 
 struct Config {
     std::wstring folder;                              // the package's folder: longshot_vk.dll, vulkan_dzn.dll, longshot_tls.dll
+    std::wstring local_state;                         // Mesa's cache path for SHGetFolderPathA(CSIDL_LOCAL_APPDATA)
     std::function<void(const std::string&)> log;      // (may be empty)
 };
 void configure(const Config& c);

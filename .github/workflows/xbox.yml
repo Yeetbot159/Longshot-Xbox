@@ -5,7 +5,7 @@ name: Xbox packages
 on:
   push:
     branches: [main]
-    paths: ['xbox/**', 'host/uwp/**', 'tests/test_xbox_build.py', '.github/workflows/xbox.yml']
+    paths: ['xbox/**', 'host/uwp/**', 'gpu/**', 'nx2/**', 'tests/test_xbox_build.py', '.github/workflows/xbox.yml']
     tags: ['xbox-v*']
   workflow_dispatch:
 
@@ -44,6 +44,59 @@ jobs:
           if (-not $dir) { throw 'llvm-mingw archive did not contain its toolchain directory' }
           "LONGSHOT_MINGW=$($dir.FullName)" >> $env:GITHUB_ENV
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Renderer headers
+        shell: pwsh
+        run: |
+          $cpm = Join-Path $env:RUNNER_TEMP 'longshot-cpm'
+          New-Item -ItemType Directory -Force $cpm | Out-Null
+          New-Item -ItemType Directory -Force (Join-Path $cpm 'vulkanheaders'), (Join-Path $cpm 'spirv-headers'), (Join-Path $cpm 'vulkanmemoryallocator') | Out-Null
+          git clone --quiet --depth 1 --branch v1.4.345 https://github.com/KhronosGroup/Vulkan-Headers.git (Join-Path $cpm 'vulkanheaders\v1.4.345')
+          git clone --quiet --depth 1 --branch vulkan-sdk-1.4.341.0 https://github.com/KhronosGroup/SPIRV-Headers.git (Join-Path $cpm 'spirv-headers\vulkan-sdk-1.4.341.0')
+          git clone --quiet --depth 1 --branch v3.3.0 https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git (Join-Path $cpm 'vulkanmemoryallocator\v3.3.0')
+          "RX_CPM=$cpm" >> $env:GITHUB_ENV
+          "OOT_WORK=$(Join-Path $env:RUNNER_TEMP 'longshot-xbox-renderer-work')" >> $env:GITHUB_ENV
+
+      - name: Build Vulkan renderer for Xbox UWP
+        shell: pwsh
+        run: |
+          $env:LONGSHOT_XBOX = '1'
+          $env:RX_VK_ONLY = '1'
+          $env:LONGSHOT_MINGW = $env:LONGSHOT_MINGW
+          python -I nx2/build.py --standalone --jobs 4
+          if ($LASTEXITCODE) { throw 'Xbox Vulkan renderer build failed' }
+
+      - name: Mesa Dozen runtime for Xbox package
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'mesa3d-26.2.6-release-msvc.7z'
+          Invoke-WebRequest -Uri 'https://github.com/pal1000/mesa-dist-win/releases/download/26.2.6/mesa3d-26.2.6-release-msvc.7z' -OutFile $archive
+          $mesaRoot = Join-Path $env:RUNNER_TEMP 'mesa-xbox-runtime'
+          New-Item -ItemType Directory -Force $mesaRoot | Out-Null
+          7z x $archive "-o$mesaRoot" -y | Out-Null
+          if ($LASTEXITCODE) { throw 'Mesa Dozen archive extraction failed' }
+          $driver = Get-ChildItem $mesaRoot -Recurse -Filter 'vulkan_dzn.dll' | Select-Object -First 1
+          if (-not $driver) { throw 'Mesa archive did not contain vulkan_dzn.dll' }
+          $mesa = $driver.Directory.FullName
+          foreach ($dll in 'dxil.dll', 'vulkan_dzn.dll') {
+            if (-not (Test-Path (Join-Path $mesa $dll))) { throw "Mesa runtime is missing $dll" }
+          }
+          "LONGSHOT_MESA=$mesa" >> $env:GITHUB_ENV
+
+      - name: Prepare build tools for the console builder
+        shell: pwsh
+        run: |
+          python -m venv (Join-Path $env:RUNNER_TEMP 'longshot-builder-venv')
+          $venvPython = Join-Path $env:RUNNER_TEMP 'longshot-builder-venv\Scripts\python.exe'
+          & $venvPython -m pip install --disable-pip-version-check -r requirements.txt
+          if ($LASTEXITCODE) { throw 'Builder Python dependencies failed to install' }
+          $pythonHome = python -c 'import sys; print(sys.base_prefix)'
+          "LONGSHOT_PYTHON_HOME=$pythonHome" >> $env:GITHUB_ENV
+          "LONGSHOT_PYTHON_VENV=$(Join-Path $env:RUNNER_TEMP 'longshot-builder-venv')" >> $env:GITHUB_ENV
+
       - name: Launcher and host checks
         shell: pwsh
         run: |
@@ -56,7 +109,7 @@ jobs:
 
       - name: Build launcher package
         shell: pwsh
-        run: .\xbox\app\build.ps1 -Version ${{ steps.version.outputs.version }} -Mingw $env:LONGSHOT_MINGW
+        run: .\xbox\app\build.ps1 -Version ${{ steps.version.outputs.version }} -Mingw $env:LONGSHOT_MINGW -Mesa $env:LONGSHOT_MESA -Renderer (Join-Path $env:OOT_WORK 'sa\build\longshot_vk.dll') -IncludeTools -PythonVenv $env:LONGSHOT_PYTHON_VENV -PythonHome $env:LONGSHOT_PYTHON_HOME
 
       - name: Build probe package
         shell: pwsh

@@ -636,6 +636,11 @@ bool create_device() {
         logf("vk: the GPU lacks dynamic rendering, synchronization2 or timeline semaphores");
         return false;
     }
+    if (!f12.bufferDeviceAddress) {
+        logf("vk: this renderer's guest shaders use PhysicalStorageBuffer addresses; the adapter has no "
+             "VK_KHR_buffer_device_address. No Xbox address-table fallback is implemented yet.");
+        return false;
+    }
     mesh.multiviewMeshShader = mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;   // (not used)
     dev.mesh_shader = dev.mesh_shader && mesh.meshShader && mesh.taskShader;
     // (task and mesh shader counts in pipeline statistics, a feature of their own: RADV has it off on RDNA2, and a query
@@ -645,6 +650,12 @@ bool create_device() {
     // that write their vertices to buffers, drawn through an ordinary graphics pipeline. It needs buffer device addresses.
     dev.mesh_fallback = !dev.mesh_shader && f12.bufferDeviceAddress && !env_on("RX_VK_NO_MESH_FALLBACK");
     if (dev.mesh_fallback) logf("vk: no mesh shaders: task and mesh programs run as compute shaders (issue 640 fallback)");
+    logf("vk: console capability path: buffer device address %s, shader int64 %s, mesh shader %s, mesh compute fallback %s, "
+         "EDS3 polygon/clamp/blend/alpha-to-coverage %s/%s/%s/%s",
+         f12.bufferDeviceAddress ? "yes" : "no", f.features.shaderInt64 ? "yes" : "no",
+         dev.mesh_shader ? "yes" : "no", dev.mesh_fallback ? "yes" : "no",
+         dev.eds3_polygon ? "yes" : "no", dev.eds3_clamp ? "yes" : "no", dev.eds3_blend ? "yes" : "no",
+         dev.eds3_a2c ? "yes" : "no");
     bool task_mesh_fallback = false;
 #ifdef _WIN32
     // (https://github.com/NotRexed/Hookshot/issues/996) AMD's RDNA 2 cards, Navi 21 to 23, can time out on task + mesh draws

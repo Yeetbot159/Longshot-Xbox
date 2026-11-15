@@ -3,7 +3,7 @@
 //   Console     the model, read from the console (GetGamingDeviceModelInformation), and the memory it gives the app
 //   Mode        Auto, Series S or Series X: the game's settings and the builder's pace for that console (profiles.h)
 //   Game files  the player's romfs and exefs folders, found on their USB drive (game_files.h)
-//   Build       builds the game from them on the console; for now measures the console and says how long it will take
+//   Build       uses the package's Python and llvm-mingw toolchain to build the game from them on the console
 //   Play        loads the game module the build left on the drive (xbox/loader), and will start the game
 //
 // The mode is applied to longshot_options.ini in LocalState, the file the game reads, whenever it changes.
@@ -114,7 +114,12 @@ State S;
 fs::path local_folder;
 std::atomic<bool> g_playing{false};
 
-fs::path drive_of(const fs::path& p) { return p.root_path(); }
+fs::path drive_of(const fs::path& p) {
+    std::lock_guard lk(S.m);
+    for (const auto& game : S.games)
+        if (game.folder == p && !game.drive_root.empty()) return game.drive_root;
+    return p.root_path();
+}
 
 void save_settings() {
     std::string game;
@@ -165,7 +170,18 @@ void scan_drives(const std::string& wanted) {
         auto folders = winrt::Windows::Storage::KnownFolders::RemovableDevices().GetFoldersAsync().get();
         for (auto const& f : folders) drives.emplace_back(std::wstring(f.Path()));
     } catch (...) {}
-    if (drives.empty()) drives.emplace_back(L"E:\\");   // (Developer Mode's first USB drive, by Win32)
+    // On the Series S probe, RemovableDevices was empty and E:\ did not exist, while D:\Drives did.
+    // Xbox exposes some attached volumes beneath that directory instead of as a Win32 drive letter.
+    if (drives.empty()) {
+        std::error_code ec;
+        const fs::path xbox_drives = L"D:\\Drives";
+        for (fs::directory_iterator it(xbox_drives, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code e2;
+            if (it->is_directory(e2)) drives.push_back(it->path());
+        }
+        if (drives.empty() && GetFileAttributesW(L"E:\\") != INVALID_FILE_ATTRIBUTES) drives.emplace_back(L"E:\\");
+    }
     auto games = lx::find_game_folders(drives);
     {
         std::lock_guard lk(S.m);
@@ -176,7 +192,7 @@ void scan_drives(const std::string& wanted) {
             if (narrow(games[i].folder.wstring()) == wanted) S.game = int(i);
         S.scanning = false;
     }
-    S.note(games.empty() ? "No game files found. Put the folder holding your romfs and exefs on a USB drive, then press A on Game files."
+    S.note(games.empty() ? "No game files found on the detected storage roots. Put romfs and exefs on an accessible USB drive, then retry Game files."
                          : "Found " + std::to_string(games.size()) + " game folder(s).");
 }
 
@@ -201,7 +217,6 @@ void run_or_measure_build() {
     std::wstring pkg_dir = winrt::Windows::ApplicationModel::Package::Current().InstalledLocation().Path().c_str();
     fs::path tools_pkg = fs::path(pkg_dir) / "tools";
     fs::path drive_tools = game_folder.empty() ? fs::path() : (drive_of(game_folder) / "Longshot" / "tools");
-    fs::path pc_tools = L"D:\\longshot-tools";
 
     fs::path py_exe, mingw_dir, script;
     std::error_code ec;
@@ -218,14 +233,6 @@ void run_or_measure_build() {
         mingw_dir = drive_tools / "llvm-mingw";
         script = drive_tools / "nx2" / "make_game.py";
     }
-    // 3. Check PC development tools
-    else if (fs::exists(pc_tools / "venv" / "Scripts" / "python.exe", ec) && fs::exists(pc_tools / "llvm-mingw-20261104-ucrt-x86_64", ec)) {
-        py_exe = pc_tools / "venv" / "Scripts" / "python.exe";
-        mingw_dir = pc_tools / "llvm-mingw-20261104-ucrt-x86_64";
-        script = fs::path(pkg_dir) / "nx2" / "make_game.py";
-        if (!fs::exists(script, ec)) script = L"D:\\Longshot_xbox1\\Longshot-Xbox\\nx2\\make_game.py";
-    }
-
     if (!game_folder.empty() && !py_exe.empty() && fs::exists(py_exe, ec) && fs::exists(script, ec)) {
         S.note("Starting build on console: " + narrow(game_folder.wstring()) + " in " + p.name + " mode (" + std::to_string(p.compile_jobs) + " job(s))...");
         fs::path drive = drive_of(game_folder);
@@ -236,6 +243,10 @@ void run_or_measure_build() {
 
         SetEnvironmentVariableW(L"LONGSHOT_XBOX", L"1");
         SetEnvironmentVariableW(L"LONGSHOT_MINGW", mingw_dir.c_str());
+        // The Series S probe measured a 5,120 MB app limit and a 4,864 MB commit ceiling. Compile one
+        // translation unit at a time and leave headroom for Python, the app, and the linker.
+        SetEnvironmentVariableW(L"LONGSHOT_MEM_LIMIT_GB", L"3.0");
+        SetEnvironmentVariableW(L"LONGSHOT_MEM_RESERVE_GB", L"1.5");
 
         std::wstring cmd = L"\"" + py_exe.wstring() + L"\" -I -u \"" + script.wstring() +
                            L"\" --romfs \"" + romfs.wstring() + L"\" --exefs \"" + exefs.wstring() +
@@ -378,6 +389,7 @@ void play() {
     static const bool modules_ready = [] {
         lx::modules::Config cfg;
         cfg.folder = std::wstring(winrt::Windows::ApplicationModel::Package::Current().InstalledLocation().Path());
+        cfg.local_state = local_folder.wstring();
         cfg.log = [](const std::string& s) {
             OutputDebugStringA((s + "\n").c_str());
             S.note(s);

@@ -131,6 +131,51 @@ std::wstring in_folder(const char* file) {
     return f + widen(file);
 }
 
+// Mesa Dozen imports two desktop-only helpers that an Xbox AppContainer does not provide. Its swap chain is
+// already redirected through dcomp_shim.cpp; keep its cache in the app's writable LocalState folder and make the
+// optional version probe fail cleanly instead of binding a generic zero-return stub.
+HRESULT WINAPI uwp_get_folder_path_a(HWND, int csidl, HANDLE, DWORD, LPSTR out) {
+    if (!out || g_cfg.local_state.empty() || (csidl & 0xff) != 0x1c) return E_NOTIMPL; // CSIDL_LOCAL_APPDATA
+    const int n = WideCharToMultiByte(CP_ACP, 0, g_cfg.local_state.c_str(), -1, out, MAX_PATH, nullptr, nullptr);
+    return n ? S_OK : E_FAIL;
+}
+DWORD WINAPI uwp_version_size_a(LPCSTR, LPDWORD handle) {
+    if (handle) *handle = 0;
+    SetLastError(ERROR_RESOURCE_DATA_NOT_FOUND);
+    return 0;
+}
+DWORD WINAPI uwp_version_size_w(LPCWSTR, LPDWORD handle) {
+    if (handle) *handle = 0;
+    SetLastError(ERROR_RESOURCE_DATA_NOT_FOUND);
+    return 0;
+}
+BOOL WINAPI uwp_version_info_a(LPCSTR, DWORD, DWORD, LPVOID) { SetLastError(ERROR_RESOURCE_DATA_NOT_FOUND); return FALSE; }
+BOOL WINAPI uwp_version_info_w(LPCWSTR, DWORD, DWORD, LPVOID) { SetLastError(ERROR_RESOURCE_DATA_NOT_FOUND); return FALSE; }
+BOOL WINAPI uwp_version_query_a(LPCVOID, LPCSTR, LPVOID* value, PUINT size) {
+    if (value) *value = nullptr;
+    if (size) *size = 0;
+    return FALSE;
+}
+BOOL WINAPI uwp_version_query_w(LPCVOID, LPCWSTR, LPVOID* value, PUINT size) {
+    if (value) *value = nullptr;
+    if (size) *size = 0;
+    return FALSE;
+}
+
+void* uwp_shell_lookup(const char* name) {
+    return name && !strcmp(name, "SHGetFolderPathA") ? (void*)uwp_get_folder_path_a : nullptr;
+}
+void* uwp_version_lookup(const char* name) {
+    if (!name) return nullptr;
+    if (!strcmp(name, "GetFileVersionInfoSizeA")) return (void*)uwp_version_size_a;
+    if (!strcmp(name, "GetFileVersionInfoSizeW")) return (void*)uwp_version_size_w;
+    if (!strcmp(name, "GetFileVersionInfoA")) return (void*)uwp_version_info_a;
+    if (!strcmp(name, "GetFileVersionInfoW")) return (void*)uwp_version_info_w;
+    if (!strcmp(name, "VerQueryValueA")) return (void*)uwp_version_query_a;
+    if (!strcmp(name, "VerQueryValueW")) return (void*)uwp_version_query_w;
+    return nullptr;
+}
+
 // A DLL of the package (libc++.dll, dxil.dll, longshot_tls.dll) or the system's, loaded by Windows
 HMODULE open_windows(const std::string& b) {
     const std::wstring w = widen(b.c_str());
@@ -190,6 +235,13 @@ HMODULE open_module(const char* name) {
     const std::string b = base_name(name);
     if (Virtual* v = virtual_named(b)) return (HMODULE)v;
     if (Mapped* m = mapped_named(b)) return (HMODULE)pel_base(m->m);
+    if (b == "shell32.dll" || b == "version.dll") {
+        auto v = std::make_unique<Virtual>();
+        v->name = b, v->lookup = b == "shell32.dll" ? uwp_shell_lookup : uwp_version_lookup;
+        Virtual* raw = v.get();
+        g_virtuals.push_back(std::move(v));
+        return (HMODULE)raw;
+    }
     if (b == "vulkan-1.dll") {   // (Dozen, the Vulkan driver, in the loader's place)
         Mapped* m = map(b, in_folder("vulkan_dzn.dll"), {{"vkGetInstanceProcAddr", "vk_icdGetInstanceProcAddr"}});
         if (!m) return nullptr;
@@ -344,6 +396,8 @@ void* resolve(void* user, const char* dll, const char* name, unsigned ordinal) {
             if (!strcmp(f.name, name)) return f.fn;
     std::lock_guard lk(g_mu);
     if (Virtual* v = virtual_named(d)) return v->lookup(name);
+    if (d == "shell32.dll") return uwp_shell_lookup(name);
+    if (d == "version.dll") return uwp_version_lookup(name);
     if (Mapped* m = mapped_named(d)) return pel_symbol(m->m, name);
     if (desktop_dll(d) && g_win32)
         if (void* f = g_win32(name)) return f;

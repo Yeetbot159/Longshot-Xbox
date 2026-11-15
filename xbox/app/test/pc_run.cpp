@@ -98,6 +98,7 @@ int main(int argc, char** argv) {
 
     mod::Config cfg;
     cfg.folder = widen(argv[1]);
+    cfg.local_state = widen(argv[4]);
     cfg.log = [](const std::string& s) { line("", s.c_str()); };
     mod::configure(cfg);
     mod::add_virtual("dcomp.dll", dcomp::lookup);

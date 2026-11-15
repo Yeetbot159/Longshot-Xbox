@@ -5,7 +5,8 @@ ports are installed. **It does not play the game yet: there is no picture.** Wha
 
 - **Longshot** (`xbox/app`), the app a player installs: it finds their game files on a USB drive, has a **Series S**
   and a **Series X** mode, estimates the build on this console, and starts a built game module with its sound,
-  keyboard, clipboard and links. The renderer (Vulkan on Direct3D 12) is the missing part.
+  keyboard, clipboard and links. The package now builds the Vulkan module and carries Mesa Dozen as the Vulkan-on-D3D12
+  driver; this path has not yet been validated on the Series S.
 - The **Xbox host layer** (`host/uwp`) and the **Xbox build** of the game (`LONGSHOT_XBOX=1`): the game as a module
   that names no desktop DLL.
 - The **loader** (`xbox/loader`) the app runs the module with, and the **probe** (`xbox/probe`) that measures what the
@@ -46,13 +47,13 @@ partition on Xbox. That is not a build-process working-set guarantee: `AppMemory
 and graphics allocations count against the same practical budget. We measure the limit at runtime and must profile the
 compiler and linker on each console before setting job counts or claiming the build fits. ([Xbox UWP resources](https://learn.microsoft.com/en-us/previous-versions/windows/uwp/xbox-apps/system-resource-allocation), [expandedResources](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations), [expected app limit](https://learn.microsoft.com/en-us/uwp/api/windows.system.memorymanager.expectedappmemoryusagelimit))
 
-**The console builder is not implemented yet.** The current launcher can look for external command-line tools and call
-`CreateProcessW`; that does not establish that an Xbox UWP Game can start those tools. The actual builder must run
-inside the app process (or use a console-supported packaged execution model), bound its memory while compiling and
-linking, and put generated scratch files on USB. The planned approach is to embed CPython and use clang/lld as
-libraries, compile a small number of translation units at a time, and measure peak app memory on Series S and X.
-Until that exists, the launcher only estimates build time when its external tool path is unavailable; it cannot yet
-build the game on the console.
+The launcher package now carries CPython, its build dependencies, and llvm-mingw and attempts to run the existing
+`nx2/make_game.py` pipeline on the console. The Series S probe measured a 5,120 MB app memory limit, a 4,864 MB
+commit ceiling, executable generated code, and successful creation of a child copy of the probe. The builder uses
+one compile job with a 3 GB compiler budget and leaves the work tree with the selected game files. The probe did not
+try to start Python or clang, and this builder has not yet been run on the console; package-process restrictions,
+memory use during linking, and writable USB discovery are still open. It is an experimental implementation, not a
+verified console build.
 
 The package declares `removableStorage` for the player's USB drive. It does not declare `broadFileSystemAccess`, which
 Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://learn.microsoft.com/en-us/uwp/extension-sdks/uwp-limitations-on-xbox))
@@ -112,15 +113,27 @@ shaders, conditional rendering and timeline semaphores. A UWP app on the console
 Two ways to give it Vulkan there:
 
 - **Mesa's Dozen** (`src/microsoft/vulkan`, MIT): a Vulkan driver on Direct3D 12, with Mesa's own SPIR-V to DXIL
-  compiler (no DXC needed at run time). It already does most of the 165 functions. What it lacks for this renderer
-  (buffer device addresses, mesh shaders, parts of extended dynamic state 3) the renderer must do without on the
-  console, which it has to anyway at shader model 6.4 / feature level 11.0 if that is what the probe finds. Needs a
-  Mesa build for UWP (meson; its few desktop calls replaced).
+  compiler (no DXC needed at run time). It already does most of the 165 functions. The Series S's shader model 6.4
+  is below Dozen's shader model 6.6 requirement for buffer device addresses; its D3D12 mesh shader tier is 0. The
+  renderer already has static-pipeline fallbacks for the extended dynamic state 3 features it uses. The package
+  carries Mesa's desktop Windows binaries and the app supplies UWP shims for its cache path, version checks and
+  composition presentation; that loader path still needs a Series S run.
 - **A layer of our own** (`gpu/vkd3d12`): the 165 functions written for this renderer alone. Smaller, but all of it
   new.
 
-The plan is Dozen first, built in CI for UWP, with a PC check on the RTX/Radeon desktop (Dozen runs there too). The
-probe's Direct3D 12 section decides how much of the renderer's feature set survives.
+The CI workflow now builds `longshot_vk.dll` as a standalone UWP renderer and packages it with the Mesa Dozen runtime.
+The Series S probe reports feature level 11.0, shader model 6.4, wave operations, and 64-bit shader operations, but no
+mesh shaders. Dozen exposes Vulkan buffer device addresses only when the D3D12 shader model is at least 6.6
+([upstream Dozen capability checks](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/dbbd251b6f00db68c1e9f0b7e8504b3b4278eaac/src/microsoft/vulkan/dzn_device.c));
+this console reports 6.4, so Dozen will not expose the address feature these guest shaders require. Longshot's existing
+mesh-to-compute fallback also requires buffer device addresses, and cannot solve that. The renderer now stops with a
+specific capability message instead of reaching shader pipeline creation and failing later. The next renderer step is
+an address-table shader path for the 6.4 adapter; pipeline work remains blocked on that path.
+
+The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
+probe source now uses 6.4 for that check. Its `OpenExistingHeapFromAddress` calls still return `E_INVALIDARG`, so the
+port also cannot assume zero-copy GPU access to the game's 512 GB virtual window. The renderer source compiles and
+the package includes Mesa Dozen, but no Series S pipeline or frame has been verified.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,
 `spirv_to_dxil.dll` and `dxil.dll`): 151 of its 162 Windows functions are in the app container's library. The 11
@@ -225,14 +238,14 @@ GPU memory every two seconds, the sum the console counts against its limit. Resu
 
 | Step | State |
 | --- | --- |
-| Probe app | Builds and signs locally; launch fix present. Series S/X capability results have not been collected yet |
-| Launcher app with the Series S / Series X modes (`xbox/app`) | Built (`Longshot.msix`); its PC test passes (21 checks). Not yet run on a console |
+| Probe app | Series S report received. A follow-up probe corrects the compute pipeline test to use the reported shader model 6.4 |
+| Launcher and builder tools (`xbox/app`) | Launcher package includes Python, dependencies, llvm-mingw and a one-job, 3 GB build limit. Console execution is unverified |
 | Memory on PC | Measured (below): over the console's budget as it stands |
 | UWP host layer (`host/uwp/`) | Written; its PC test passes (34 checks, linked against the UWP import library alone) |
 | The game as a module (`LONGSHOT_XBOX=1`) | See "Building the module" |
-| Vulkan on Direct3D 12 | No Xbox renderer is verified. A PC Dozen harness exists, but loading Dozen was denied by this PC's code-generation policy; the console run and D3D12 results are still required |
+| Vulkan on Direct3D 12 | UWP renderer compiles and is packaged with Dozen's UWP import shims. Series S reports shader model 6.4, below Dozen's BDA threshold; the renderer currently stops with a clear message |
 | Game-module loader (`xbox/loader`) | Written; its test passes on a PC (14 checks). On the console: waits for the probe's `codeGeneration` answer |
-| Builder on the console (embedded CPython, clang and lld as libraries) | Not implemented. The launcher has an external-process experiment and estimate, but the actual in-process, memory-bounded builder and its console measurements remain outstanding |
+| Builder on the console | Packaged CPython/llvm-mingw subprocess path is implemented with a measured memory budget; Python/clang launch, USB output, and full build still need an Xbox run |
 
 The CPU benchmark on the PC this was written on (24 threads): one thread 259 ms, 24 threads at once 587 ms.
 

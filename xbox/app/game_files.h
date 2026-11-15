@@ -1,6 +1,6 @@
-// Where the player's own game files and the build's results are on their USB drive. The PC launcher takes a folder holding
-// the game's romfs and exefs folders; the console takes the same, anywhere in the drive's first two levels. The build
-// works in <drive>\Longshot\work and installs the game in <drive>\Longshot\game (the module beside image.bin, as
+// Where the player's own game files and the build's results are on removable storage. The launcher takes a folder holding
+// the game's romfs and exefs folders; it keeps the selected storage root with that folder so outputs go back to the same
+// volume. The build works in <drive>\Longshot\work and installs the game in <drive>\Longshot\game (the module beside image.bin, as
 // nx2/make_game.py installs it with LONGSHOT_XBOX=1); nothing of either is ever copied off the drive.
 #pragma once
 #include <cstdint>
@@ -12,6 +12,7 @@ namespace longshot_xbox {
 struct GameFolder {
     std::filesystem::path folder;   // (holds romfs\ and exefs\)
     std::uintmax_t romfs_bytes;
+    std::filesystem::path drive_root;   // root where Longshot's work and game outputs must stay
 };
 
 // The folders under each root (a drive, E:\) that hold romfs\ and exefs\main, down to `depth` levels.

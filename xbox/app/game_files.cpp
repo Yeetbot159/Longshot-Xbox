@@ -24,9 +24,9 @@ std::uintmax_t tree_bytes(const fs::path& p) {
     return n;
 }
 
-void scan(const fs::path& dir, int depth, std::vector<GameFolder>& out) {
+void scan(const fs::path& root, const fs::path& dir, int depth, std::vector<GameFolder>& out) {
     if (is_game_folder(dir)) {
-        out.push_back({dir, tree_bytes(dir / "romfs")});
+        out.push_back({dir, tree_bytes(dir / "romfs"), root});
         return;
     }
     if (depth <= 0) return;
@@ -35,7 +35,7 @@ void scan(const fs::path& dir, int depth, std::vector<GameFolder>& out) {
         std::error_code e2;
         const fs::path name = it->path().filename();
         if (!it->is_directory(e2) || name == "Longshot" || name == "System Volume Information" || name == "$RECYCLE.BIN") continue;
-        scan(it->path(), depth - 1, out);
+        scan(root, it->path(), depth - 1, out);
     }
 }
 
@@ -43,7 +43,7 @@ void scan(const fs::path& dir, int depth, std::vector<GameFolder>& out) {
 
 std::vector<GameFolder> find_game_folders(const std::vector<fs::path>& roots, int depth) {
     std::vector<GameFolder> out;
-    for (const fs::path& r : roots) scan(r, depth, out);
+    for (const fs::path& r : roots) scan(r, r, depth, out);
     return out;
 }
 

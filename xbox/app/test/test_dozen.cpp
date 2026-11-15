@@ -347,6 +347,7 @@ int main(int argc, char** argv) {
     {
         const std::string a = argv[1];
         cfg.folder.assign(a.begin(), a.end());
+        cfg.local_state = cfg.folder;
     }
     cfg.log = [](const std::string& s) { std::printf("      %s\n", s.c_str()); };
     mod::configure(cfg);
