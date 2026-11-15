@@ -643,7 +643,7 @@ bool create_device() {
         const VkPhysicalDeviceLimits& limits = dev.props.limits;
         logf("vk: address-table prerequisites (not implemented): storage-buffer dynamic indexing %s, nonuniform indexing %s, "
              "runtime arrays %s, per-stage storage buffers %u, descriptor-set storage buffers %u, shader int64 %s",
-             f12.shaderStorageBufferArrayDynamicIndexing ? "yes" : "no",
+             f.features.shaderStorageBufferArrayDynamicIndexing ? "yes" : "no",
              f12.shaderStorageBufferArrayNonUniformIndexing ? "yes" : "no",
              f12.runtimeDescriptorArray ? "yes" : "no", limits.maxPerStageDescriptorStorageBuffers,
              limits.maxDescriptorSetStorageBuffers, f.features.shaderInt64 ? "yes" : "no");
