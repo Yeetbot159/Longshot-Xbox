@@ -65,12 +65,12 @@ jobs:
       - name: Verify both signatures
         shell: pwsh
         run: |
-          Import-Certificate -FilePath xbox\out\LongshotXbox.cer -CertStoreLocation Cert:\CurrentUser\TrustedPeople | Out-Null
+          Import-Certificate -FilePath xbox\out\LongshotXbox.cer -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
           . .\xbox\common.ps1
           $bin = Get-SdkBin
-          & (Join-Path $bin 'signtool.exe') verify /pa xbox\out\Longshot.msix
+          & (Join-Path $bin 'signtool.exe') verify /pa /r LongshotXbox xbox\out\Longshot.msix
           if ($LASTEXITCODE) { throw 'Longshot.msix signature verification failed' }
-          & (Join-Path $bin 'signtool.exe') verify /pa xbox\out\LongshotXboxProbe.msix
+          & (Join-Path $bin 'signtool.exe') verify /pa /r LongshotXbox xbox\out\LongshotXboxProbe.msix
           if ($LASTEXITCODE) { throw 'LongshotXboxProbe.msix signature verification failed' }
 
       - uses: actions/upload-artifact@v4
