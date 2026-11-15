@@ -1,125 +1,93 @@
-# The Xbox packages, built on GitHub's Windows machines: every push to main that touches xbox/ builds them as an
-# artifact; a tag probe-v<major>.<minor>.<patch> also publishes the probe as a release (the .msix and its certificate),
-# installed through Device Portal as the Xbox Emulation Hub's ports are. Nothing of the game is built here or anywhere
-# in CI: the game module is made on each player's own PC.
+# Builds the game-free Xbox packages. Tag xbox-vMAJOR.MINOR.PATCH to publish one prerelease
+# containing the launcher, the capability probe, and their shared public signing certificate.
 name: Xbox packages
 
 on:
   push:
     branches: [main]
-    paths: ['xbox/**', 'host/uwp/**', '.github/workflows/xbox.yml']
-    tags: ['probe-v*', 'v*']
+    paths: ['xbox/**', 'host/uwp/**', 'tests/test_xbox_build.py', '.github/workflows/xbox.yml']
+    tags: ['xbox-v*']
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  loader:
+  packages:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            xbox
-            host/uwp
-          fetch-depth: 1
 
-      - name: llvm-mingw (what the game module is built with)
-        shell: powershell
+      - name: Version
+        id: version
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if ($env:REF_NAME -match '^xbox-v(\d+)\.(\d+)\.(\d+)$') {
+            $v = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0"
+          } else {
+            $v = '0.0.0.0'
+          }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: llvm-mingw runtime for Xbox game modules
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download --repo mstorsjo/llvm-mingw --pattern '*-ucrt-x86_64.zip' --dir $env:RUNNER_TEMP
           $zip = Get-ChildItem $env:RUNNER_TEMP -Filter '*-ucrt-x86_64.zip' | Select-Object -First 1
+          if (-not $zip) { throw 'llvm-mingw release archive was not downloaded' }
           Expand-Archive $zip.FullName -DestinationPath $env:RUNNER_TEMP
           $dir = Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'llvm-mingw-*' | Select-Object -First 1
+          if (-not $dir) { throw 'llvm-mingw archive did not contain its toolchain directory' }
           "LONGSHOT_MINGW=$($dir.FullName)" >> $env:GITHUB_ENV
 
-      - name: The loader's test
-        shell: powershell
-        run: .\xbox\loader\test\run.ps1
-
-      - name: The Xbox host layer's test (linked against the UWP import library alone)
-        shell: powershell
-        run: .\host\uwp\test\run.ps1
-
-  launcher:
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: |
-            xbox
-            host/uwp
-          fetch-depth: 1
-
-      - name: Version
-        id: version
-        shell: powershell
+      - name: Launcher and host checks
+        shell: pwsh
         run: |
-          $v = '0.0.0.0'
-          if ('${{ github.ref }}' -match '^refs/tags/v(\d+)\.(\d+)\.(\d+)$') { $v = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0" }
-          "version=$v" >> $env:GITHUB_OUTPUT
+          python -I -B tests/test_xbox_build.py
+          if ($LASTEXITCODE) { throw 'Xbox build source checks failed' }
+          .\xbox\app\test\run.ps1
+          if ($LASTEXITCODE) { throw 'launcher checks failed' }
+          .\host\uwp\test\run.ps1
+          if ($LASTEXITCODE) { throw 'UWP host checks failed' }
 
-      - name: The launcher's test
-        shell: powershell
-        run: .\xbox\app\test\run.ps1
+      - name: Build launcher package
+        shell: pwsh
+        run: .\xbox\app\build.ps1 -Version ${{ steps.version.outputs.version }} -Mingw $env:LONGSHOT_MINGW
 
-      - name: Build the launcher
-        shell: powershell
-        run: .\xbox\app\build.ps1 -Version ${{ steps.version.outputs.version }}
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Longshot-${{ steps.version.outputs.version }}
-          path: |
-            xbox/out/Longshot.msix
-            xbox/out/LongshotXbox.cer
-
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create '${{ github.ref_name }}' xbox/out/Longshot.msix xbox/out/LongshotXbox.cer `
-            --repo '${{ github.repository }}' --title 'Longshot for Xbox ${{ github.ref_name }}' `
-            --notes-file xbox/app/RELEASE.md --prerelease
-
-  probe:
-    runs-on: windows-2025
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: xbox
-          fetch-depth: 1
-
-      - name: Version
-        id: version
-        shell: powershell
-        run: |
-          $v = '0.0.0.0'
-          if ('${{ github.ref }}' -match '^refs/tags/probe-v(\d+)\.(\d+)\.(\d+)$') { $v = "$($Matches[1]).$($Matches[2]).$($Matches[3]).0" }
-          "version=$v" >> $env:GITHUB_OUTPUT
-
-      - name: Build the probe
-        shell: powershell
+      - name: Build probe package
+        shell: pwsh
         run: .\xbox\probe\build.ps1 -Version ${{ steps.version.outputs.version }}
 
+      - name: Verify both signatures
+        shell: pwsh
+        run: |
+          . .\xbox\common.ps1
+          $bin = Get-SdkBin
+          & (Join-Path $bin 'signtool.exe') verify /pa xbox\out\Longshot.msix
+          if ($LASTEXITCODE) { throw 'Longshot.msix signature verification failed' }
+          & (Join-Path $bin 'signtool.exe') verify /pa xbox\out\LongshotXboxProbe.msix
+          if ($LASTEXITCODE) { throw 'LongshotXboxProbe.msix signature verification failed' }
+
       - uses: actions/upload-artifact@v4
         with:
-          name: LongshotXboxProbe-${{ steps.version.outputs.version }}
+          name: LongshotXbox-${{ steps.version.outputs.version }}
+          if-no-files-found: error
           path: |
+            xbox/out/Longshot.msix
             xbox/out/LongshotXboxProbe.msix
             xbox/out/LongshotXbox.cer
 
-      - name: Release
-        if: startsWith(github.ref, 'refs/tags/probe-v')
-        shell: powershell
+      - name: Publish prerelease
+        if: startsWith(github.ref, 'refs/tags/xbox-v')
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          gh release create '${{ github.ref_name }}' xbox/out/LongshotXboxProbe.msix xbox/out/LongshotXbox.cer `
-            --repo '${{ github.repository }}' --title 'Longshot Xbox Probe ${{ github.ref_name }}' `
-            --notes-file xbox/probe/RELEASE.md --prerelease
+          gh release create $env:REF_NAME xbox/out/Longshot.msix xbox/out/LongshotXboxProbe.msix xbox/out/LongshotXbox.cer `
+            --repo '${{ github.repository }}' --title "Longshot Xbox $env:REF_NAME" `
+            --notes-file xbox/RELEASE.md --prerelease

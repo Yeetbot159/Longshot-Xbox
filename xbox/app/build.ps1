@@ -38,10 +38,12 @@ if ($LASTEXITCODE) { throw "Longshot.exe did not build ($LASTEXITCODE)" }
 cl /nologo /O2 /MT /W4 /Fo"$obj\\" (Join-Path $PSScriptRoot 'tls_slot.c') /LD /link /APPCONTAINER /OUT:"$pkg\longshot_tls.dll" /IMPLIB:"$obj\longshot_tls.lib"
 if ($LASTEXITCODE) { throw 'longshot_tls.dll did not build' }
 
-foreach ($dll in 'vulkan_dzn.dll', 'dxil.dll') {
-    $p = Join-Path $Mesa $dll
-    if (-not (Test-Path $p)) { throw "no $dll in $Mesa (mesa-dist-win's x64 folder: pass -Mesa or set LONGSHOT_MESA)" }
-    Copy-Item $p $pkg
+if ($Renderer) {
+    foreach ($dll in 'vulkan_dzn.dll', 'dxil.dll') {
+        $p = Join-Path $Mesa $dll
+        if (-not (Test-Path $p)) { throw "no $dll in $Mesa (mesa-dist-win's x64 folder: pass -Mesa or set LONGSHOT_MESA)" }
+        Copy-Item $p $pkg
+    }
 }
 foreach ($dll in 'libc++.dll', 'libunwind.dll') {
     $p = Join-Path $Mingw "x86_64-w64-mingw32\bin\$dll"
@@ -53,7 +55,7 @@ if ($Renderer) {
     if (-not (Test-Path $Renderer)) { throw "no renderer at $Renderer" }
     Copy-Item $Renderer (Join-Path $pkg 'longshot_vk.dll')
 } else {
-    Write-Warning 'no -Renderer: the package has no longshot_vk.dll, and the game will start without a picture'
+    Write-Warning 'no -Renderer: this is a launcher-only package; it cannot render the game'
 }
 
 if ($IncludeTools) {
