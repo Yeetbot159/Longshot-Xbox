@@ -3,7 +3,7 @@
 **Longshot Xbox** is an experimental Xbox Series X|S Developer Mode port maintained in this repository by **Yeetbot159**. It adapts the original [Longshot project](https://git.magicbean.dev/MagicBeanDev/Longshot), a static recompilation of a Nintendo Switch 2 game, for Xbox's UWP app model.
 
 > [!WARNING]
-> **The game does not render on Xbox yet.** The launcher and console builder are prototypes. When Vulkan buffer device addresses are unavailable, the renderer can now continue in a bound-buffer compatibility mode, but guest pointer accesses still need an address-table shader translation path. The Series S probe also reports no mesh-shader tier through its UWP D3D12 device, and the mesh compute fallback needs BDA. No Series S gameplay frame has been verified.
+> **Xbox gameplay is not verified yet.** The launcher and console builder are prototypes. The renderer now continues in a bound-buffer compatibility mode when Vulkan buffer device addresses are unavailable. A PC capability simulation with both BDA and mesh shaders disabled reached and rendered Kokiri Forest, but some draw paths remain unsupported and this has not been tested on Series S. Complete guest pointer translation and the Series S mesh path still need work.
 
 This repository contains the Xbox-specific app, renderer packaging, builder, loader, probe, and integration changes. It does not contain the game, game keys, or game-derived files.
 
@@ -14,13 +14,13 @@ This repository contains the Xbox-specific app, renderer packaging, builder, loa
 | Launcher app | Builds as a sideloadable UWP package; finds player files on removable storage and selects Series S or Series X build settings. |
 | On-console builder | Prototype packages CPython, its dependencies, and llvm-mingw. It has not yet completed a game build on an Xbox. |
 | Game module and loader | UWP host shims and a PE module loader are included. The module must be built from the player's own files. |
-| Vulkan renderer | `longshot_vk.dll` and Mesa Dozen are packaged. Renderer startup and a game frame have not been verified on Xbox. |
+| Vulkan renderer | `longshot_vk.dll` and Mesa Dozen are packaged. A PC simulation with BDA and mesh shaders disabled rendered the opening game scene; Series S renderer startup and gameplay remain unverified. |
 | Capability probe | Measures UWP, memory, storage, input, audio, and D3D12 features. The latest probe source checks Dozen's `ID3D12Device13::OpenExistingHeapFromAddress1` path and GPU access through imported memory. |
 | Series S and X hardware | Series S probe data is available in the task history; no Series X probe result has been collected. Whole-console hardware specifications do not describe the resources available to a UWP app. |
 
 ### Renderer limitation
 
-The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. Longshot's mesh-to-compute fallback also relies on buffer device addresses. Without BDA, the renderer avoids those address-based paths and can proceed with ordinary descriptor-bound buffers; guest pointers not covered by an already-bound storage buffer remain unmapped, and mesh draws remain unavailable. An address-table shader translation path is still required for game rendering.
+The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. Longshot's mesh-to-compute fallback also relies on buffer device addresses. Without BDA, the renderer avoids those address-based paths and can proceed with ordinary descriptor-bound buffers; guest pointers not covered by an already-bound storage buffer remain unmapped, and mesh draws remain unavailable. A PC run with `RX_VK_NO_BDA=1` and `RX_VK_NO_MESH=1` rendered through Kokiri Forest, but the log still showed unsupported draws and no Series S run has confirmed the same behavior. Complete guest-pointer translation and mesh rendering are still required for full game support.
 
 The reported mesh-shader tier is for the current UWP/Dozen path. Microsoft documents native mesh-shader pipelines on Series X|S devkits through GDK; this UWP measurement does not establish the console silicon's full graphics capabilities.
 

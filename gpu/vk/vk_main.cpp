@@ -608,6 +608,12 @@ bool create_device() {
              drv.driverName, drv.driverInfo, (int)dev.fixes.fetch_bounds, (int)dev.fixes.nan_bits, (int)dev.fixes.gather_offset);
     }
     dev.eds3_a2c = dev.dynamic_state3 && eds3.extendedDynamicState3AlphaToCoverageEnable;
+    // (diagnostics) exercise the Xbox UWP path on a desktop adapter that normally supports BDA.
+    // This disables the queried Vulkan 1.2 feature before vkCreateDevice; it is not a performance switch.
+    if (env_on("RX_VK_NO_BDA")) {
+        f12.bufferDeviceAddress = VK_FALSE;
+        logf("vk: buffer device addresses disabled by RX_VK_NO_BDA");
+    }
     dev.vk12 = f12;
     dev.vk13 = f13;
     {   // (longshot, after TotK Recomp's vk_caps.c) NVN's programs are written for 32 lanes: the translator is told 32, and the lane
@@ -651,6 +657,12 @@ bool create_device() {
              "physical guest pointers and mesh compute fallback are disabled");
     }
     mesh.multiviewMeshShader = mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;   // (not used)
+    // (diagnostics) reproduce the Series S UWP mesh tier on a desktop device for local smoke tests.
+    if (env_on("RX_VK_NO_MESH")) {
+        mesh.meshShader = VK_FALSE;
+        mesh.taskShader = VK_FALSE;
+        logf("vk: mesh and task shaders disabled by RX_VK_NO_MESH");
+    }
     dev.mesh_shader = dev.mesh_shader && mesh.meshShader && mesh.taskShader;
     // (task and mesh shader counts in pipeline statistics, a feature of their own: RADV has it off on RDNA2, and a query
     // pool made with those counts all the same can hang the GPU)
