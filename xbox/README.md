@@ -225,14 +225,14 @@ GPU memory every two seconds, the sum the console counts against its limit. Resu
 
 | Step | State |
 | --- | --- |
-| Probe app | Built; waiting for a run on a Series S |
+| Probe app | Builds and signs locally; launch fix present. Series S/X capability results have not been collected yet |
 | Launcher app with the Series S / Series X modes (`xbox/app`) | Built (`Longshot.msix`); its PC test passes (21 checks). Not yet run on a console |
 | Memory on PC | Measured (below): over the console's budget as it stands |
 | UWP host layer (`host/uwp/`) | Written; its PC test passes (34 checks, linked against the UWP import library alone) |
 | The game as a module (`LONGSHOT_XBOX=1`) | See "Building the module" |
-| Vulkan on Direct3D 12 | Not started: Mesa's Dozen first (above); waits for the probe's Direct3D 12 answers |
+| Vulkan on Direct3D 12 | No Xbox renderer is verified. A PC Dozen harness exists, but loading Dozen was denied by this PC's code-generation policy; the console run and D3D12 results are still required |
 | Game-module loader (`xbox/loader`) | Written; its test passes on a PC (14 checks). On the console: waits for the probe's `codeGeneration` answer |
-| Builder on the console (embedded CPython, clang and lld as libraries) | Designed (above); waits for the probe's answers on starting programs, CPU speed and the USB drive |
+| Builder on the console (embedded CPython, clang and lld as libraries) | Not implemented. The launcher has an external-process experiment and estimate, but the actual in-process, memory-bounded builder and its console measurements remain outstanding |
 
 The CPU benchmark on the PC this was written on (24 threads): one thread 259 ms, 24 threads at once 587 ms.
 

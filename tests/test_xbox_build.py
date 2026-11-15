@@ -31,6 +31,12 @@ def assigned(name):
 
 
 class XboxBuild(unittest.TestCase):
+    def test_xbox_packages_do_not_request_unsupported_broad_filesystem_access(self):
+        for manifest in ("xbox", "app", "AppxManifest.xml"), ("xbox", "probe", "AppxManifest.xml"):
+            text = read(*manifest)
+            self.assertNotIn("broadFileSystemAccess", text)
+            self.assertIn('Name="removableStorage"', text)
+
     def test_link_names_no_desktop_library(self):
         libs = assigned("UWP_LIBS")
         self.assertIn("-lwindowsapp", libs)

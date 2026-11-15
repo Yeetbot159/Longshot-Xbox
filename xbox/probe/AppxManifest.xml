@@ -25,7 +25,6 @@
     </Application>
   </Applications>
   <Capabilities>
-    <rescap:Capability Name="broadFileSystemAccess" />
     <rescap:Capability Name="expandedResources" />
     <uap:Capability Name="removableStorage" />
     <Capability Name="codeGeneration" />
