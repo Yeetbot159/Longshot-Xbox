@@ -80,11 +80,34 @@ Build and use only from files you are entitled to use. Do not commit, upload, or
 - `.github/workflows/xbox.yml` — builds game-free Xbox packages and publishes tagged prereleases.
 - `xbox/README.md` — detailed implementation notes, capability findings, and current technical limitations.
 
-## Original project, credits, and license
+## License
 
-This Xbox port is based on [Longshot](https://git.magicbean.dev/MagicBeanDev/Longshot), whose code and history are maintained by the original Longshot contributors. Longshot continues the work of [Hookshot](https://github.com/NotRexed/Hookshot) and incorporates code from other projects, including Eden, suyu, Mesa, and a64-kit. Their copyright notices and third-party licenses remain with their respective code; see each component's `PROVENANCE.md` and license files.
+Longshot is free software under the [GNU General Public License, version 3 or later](https://git.magicbean.dev/MagicBeanDev/Longshot/src/branch/main/LICENSE) (GPL-3.0-or-later). This Xbox port adapts Longshot, which is a modified version of Hookshot, released by NotRexed under the same license. The changes made to Longshot since that fork belong to the Longshot project; the Xbox-specific changes are maintained in this repository by Yeetbot159 and contributors. See [`LICENSE`](LICENSE), and preserve the notices already present in source files.
 
-The Longshot code in this repository is licensed under the **GNU General Public License, version 3 or later (GPL-3.0-or-later)**. See [`LICENSE`](LICENSE). Changes made specifically for this Xbox port are maintained here by Yeetbot159 and contributors, under the same license. Do not remove or replace the original authors' notices. This repository is an unofficial fan project and is not affiliated with or endorsed by Nintendo.
+```yaml
+Hookshot: Copyright (C) 2026 NotRexed and the Hookshot contributors
+Longshot: Copyright (C) 2026 the Longshot contributors
+```
+
+Longshot includes code from Eden and suyu, also under the GPL. Third-party components under compatible licenses keep their own notices in their folders, including Sirit, the Vulkan Memory Allocator, SDL, Opus, Dear ImGui, zstd, the Libertinus fonts, zbic, and the a64-kit tools. Mesa Dozen and the Xbox package's other components retain their own licensing terms as well.
+
+Longshot is an unofficial fan project, not affiliated with or endorsed by Nintendo. The Legend of Zelda and Ocarina of Time are trademarks of Nintendo.
+
+## Credits
+
+This repository builds on the original [Longshot project](https://git.magicbean.dev/MagicBeanDev/Longshot) and its contributors. The Xbox launcher, UWP host integration, capability probe, package workflow, and console port work here are maintained by Yeetbot159 and contributors.
+
+- **NotRexed**: [Hookshot](https://github.com/NotRexed/Hookshot), the project Longshot forked from, plus BlueShell (Mario Kart World), Skybound (Tears of the Kingdom), and the a64-kit tools.
+- [**Eden**](https://git.eden-emu.dev/eden-emu/eden) and **Eglantine**: shader recompiler and Switch 2 shader work.
+- **suyu**: graphics decoders and the AArch64 translator.
+- [**seedds/nxnative**](https://github.com/seedds/nxnative): reference for task and mesh shaders.
+- [**EvilBoyce / evilmfkr**](https://github.com/evilmfkr/Hookshot) (EvilOOT): GPU culling, ambient light probes, pond water, game fog, and other graphics fixes carried by Longshot.
+- [**zortos293/Lichii**](https://github.com/zortos293/Lichii): reference for Ampere shader lowering and its compare-exchange retry fix.
+- [**Mesa**](https://www.mesa3d.org/): Dozen, the Vulkan-on-Direct3D 12 driver packaged for Xbox, and graphics compiler work used by the original project.
+- [**mstorsjo/llvm-mingw**](https://github.com/mstorsjo/llvm-mingw): the Windows compiler toolchain used to build game modules.
+- **kinnay/zbic, Opus, and SDL**: decompression, audio, and controller support in the original Longshot codebase.
+- **NVIDIA DLSS and AMD FidelityFX**: optional technologies supported by the original Longshot project. Their SDKs, runtime files, and license terms belong to NVIDIA and AMD; they are not bundled in these Xbox packages.
+- Everyone who contributed fixes and testing to Longshot, including SkippySteve, monsterlag, klimovich008, hckrman101, madebyjordan, N3oTraX, shayderrr, gab9281, Wpaif, nicholasgower, ZurielAtr, Joey-Magnus, Zorkats, d3zessete, chrispository, vzeol, leonidasmark, Segmentree, ShyVortex, hiKareeem, and i900gaming.
 
 ## Contributing
 
