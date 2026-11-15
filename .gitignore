@@ -35,6 +35,15 @@ __pycache__/
 *.sha1
 *.log
 
+# ---- Xbox builds: packages hold a built game (never committed), certificates and keys ----
+/xbox/out/
+*.msix
+*.appx
+*.msixbundle
+*.appxbundle
+*.cer
+*.pfx
+
 # ---- Linux builds ----
 build-linux/
 *.so
