@@ -24,6 +24,7 @@
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <fstream>
@@ -98,8 +99,8 @@ struct State {
     uint64_t memory_limit = 0;
     lx::Mode mode = lx::Mode::automatic;
     std::vector<fs::path> drives;
-    std::vector<lx::GameFolder> games;
-    int game = 0;
+    std::vector<lx::DataFolder> romfs_folders, exefs_folders;
+    int romfs = -1, exefs = -1;
     bool scanning = false, busy = false;
     std::vector<std::string> notes;   // (the panel under the rows)
 
@@ -116,17 +117,20 @@ std::atomic<bool> g_playing{false};
 
 fs::path drive_of(const fs::path& p) {
     std::lock_guard lk(S.m);
-    for (const auto& game : S.games)
-        if (game.folder == p && !game.drive_root.empty()) return game.drive_root;
+    for (const auto& folder : S.romfs_folders)
+        if (folder.folder == p && !folder.drive_root.empty()) return folder.drive_root;
+    for (const auto& folder : S.exefs_folders)
+        if (folder.folder == p && !folder.drive_root.empty()) return folder.drive_root;
     return p.root_path();
 }
 
 void save_settings() {
-    std::string game;
+    std::string romfs, exefs;
     {
         std::lock_guard lk(S.m);
-        if (S.game < int(S.games.size())) game = narrow(S.games[S.game].folder.wstring());
-        write_file(local_folder / "launcher.ini", std::string("mode=") + lx::mode_key(S.mode) + "\ngame=" + game + "\n");
+        if (S.romfs >= 0 && S.romfs < int(S.romfs_folders.size())) romfs = narrow(S.romfs_folders[S.romfs].folder.wstring());
+        if (S.exefs >= 0 && S.exefs < int(S.exefs_folders.size())) exefs = narrow(S.exefs_folders[S.exefs].folder.wstring());
+        write_file(local_folder / "launcher.ini", std::string("mode=") + lx::mode_key(S.mode) + "\nromfs=" + romfs + "\nexefs=" + exefs + "\n");
     }
 }
 
@@ -143,14 +147,19 @@ void apply_mode() {
     save_settings();
 }
 
-void load_settings(std::string& game) {
+void load_settings(std::string& romfs, std::string& exefs) {
     std::istringstream in(read_file(local_folder / "launcher.ini"));
     std::string line;
+    std::string legacy_game;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
         if (line.rfind("mode=", 0) == 0) S.mode = lx::mode_from_key(line.substr(5));
-        if (line.rfind("game=", 0) == 0) game = line.substr(5);
+        if (line.rfind("romfs=", 0) == 0) romfs = line.substr(6);
+        if (line.rfind("exefs=", 0) == 0) exefs = line.substr(6);
+        if (line.rfind("game=", 0) == 0) legacy_game = line.substr(5);
     }
+    if (romfs.empty() && !legacy_game.empty()) romfs = narrow((fs::path(widen(legacy_game)) / "romfs").wstring());
+    if (exefs.empty() && !legacy_game.empty()) exefs = narrow((fs::path(widen(legacy_game)) / "exefs").wstring());
 }
 
 lx::Model read_model() {
@@ -159,7 +168,7 @@ lx::Model read_model() {
     return lx::model_from_device_id(info.vendorId == GAMING_DEVICE_VENDOR_ID_MICROSOFT, uint32_t(info.deviceId));
 }
 
-void scan_drives(const std::string& wanted) {
+void scan_drives(const std::string& wanted_romfs, const std::string& wanted_exefs) {
     {
         std::lock_guard lk(S.m);
         if (S.scanning) return;
@@ -182,28 +191,48 @@ void scan_drives(const std::string& wanted) {
         }
         if (drives.empty() && GetFileAttributesW(L"E:\\") != INVALID_FILE_ATTRIBUTES) drives.emplace_back(L"E:\\");
     }
-    auto games = lx::find_game_folders(drives);
+    auto romfs_folders = lx::find_romfs_folders(drives);
+    auto exefs_folders = lx::find_exefs_folders(drives);
+    const size_t romfs_count = romfs_folders.size(), exefs_count = exefs_folders.size();
+    int romfs = -1, exefs = -1;
+    for (size_t i = 0; i < romfs_folders.size(); ++i)
+        if (!wanted_romfs.empty() && narrow(romfs_folders[i].folder.wstring()) == wanted_romfs) romfs = int(i);
+    for (size_t i = 0; i < exefs_folders.size(); ++i)
+        if (!wanted_exefs.empty() && narrow(exefs_folders[i].folder.wstring()) == wanted_exefs) exefs = int(i);
+    if (romfs < 0 && exefs < 0) {
+        for (size_t i = 0; i < romfs_folders.size() && romfs < 0; ++i)
+            for (size_t j = 0; j < exefs_folders.size(); ++j)
+                if (romfs_folders[i].folder.parent_path() == exefs_folders[j].folder.parent_path()) {
+                    romfs = int(i);
+                    exefs = int(j);
+                    break;
+                }
+    }
+    if (romfs < 0 && !romfs_folders.empty()) romfs = 0;
+    if (exefs < 0 && !exefs_folders.empty()) exefs = 0;
     {
         std::lock_guard lk(S.m);
         S.drives = drives;
-        S.games = games;
-        S.game = 0;
-        for (size_t i = 0; i < games.size(); ++i)
-            if (narrow(games[i].folder.wstring()) == wanted) S.game = int(i);
+        S.romfs_folders = std::move(romfs_folders);
+        S.exefs_folders = std::move(exefs_folders);
+        S.romfs = romfs;
+        S.exefs = exefs;
         S.scanning = false;
     }
-    S.note(games.empty() ? "No game files found on the detected storage roots. Put romfs and exefs on an accessible USB drive, then retry Game files."
-                         : "Found " + std::to_string(games.size()) + " game folder(s).");
+    S.note(romfs < 0 && exefs < 0
+               ? "No ROMFS or ExeFS folders found on the detected storage roots. Connect USB storage and rescan."
+               : "Found " + std::to_string(romfs_count) + " ROMFS and " + std::to_string(exefs_count) + " ExeFS folder(s).");
 }
 
 void run_or_measure_build() {
     lx::Mode mode;
     lx::Model model;
-    fs::path game_folder;
+    fs::path romfs_folder, exefs_folder;
     {
         std::lock_guard lk(S.m);
         if (S.busy || g_playing) return;
-        if (S.game < int(S.games.size())) game_folder = S.games[S.game].folder;
+        if (S.romfs >= 0 && S.romfs < int(S.romfs_folders.size())) romfs_folder = S.romfs_folders[S.romfs].folder;
+        if (S.exefs >= 0 && S.exefs < int(S.exefs_folders.size())) exefs_folder = S.exefs_folders[S.exefs].folder;
         mode = S.mode, model = S.model;
         S.busy = true;
     }
@@ -213,10 +242,11 @@ void run_or_measure_build() {
     };
     const lx::Profile& p = lx::profile_for(mode, model);
 
-    // Look for tools in package, USB drive, or PC tools folder
+    // Look for the packaged builder tools, then the optional copy on the ROMFS drive.
     std::wstring pkg_dir = winrt::Windows::ApplicationModel::Package::Current().InstalledLocation().Path().c_str();
     fs::path tools_pkg = fs::path(pkg_dir) / "tools";
-    fs::path drive_tools = game_folder.empty() ? fs::path() : (drive_of(game_folder) / "Longshot" / "tools");
+    fs::path drive = romfs_folder.empty() ? fs::path() : drive_of(romfs_folder);
+    fs::path drive_tools = drive.empty() ? fs::path() : (drive / "Longshot" / "tools");
 
     fs::path py_exe, mingw_dir, script;
     std::error_code ec;
@@ -233,13 +263,11 @@ void run_or_measure_build() {
         mingw_dir = drive_tools / "llvm-mingw";
         script = drive_tools / "nx2" / "make_game.py";
     }
-    if (!game_folder.empty() && !py_exe.empty() && fs::exists(py_exe, ec) && fs::exists(script, ec)) {
-        S.note("Starting build on console: " + narrow(game_folder.wstring()) + " in " + p.name + " mode (" + std::to_string(p.compile_jobs) + " job(s))...");
-        fs::path drive = drive_of(game_folder);
-        fs::path out = drive / "Longshot";
+    if (!romfs_folder.empty() && !exefs_folder.empty() && !py_exe.empty() && fs::exists(py_exe, ec) && fs::exists(script, ec)) {
+        S.note(std::string("Building from selected ROMFS and ExeFS on console in ") + p.name + " mode (" +
+               std::to_string(p.compile_jobs) + " job(s))...");
+        fs::path out = lx::game_out(drive);
         fs::path work = lx::work_folder(drive);
-        fs::path romfs = game_folder / "romfs";
-        fs::path exefs = game_folder / "exefs";
 
         SetEnvironmentVariableW(L"LONGSHOT_XBOX", L"1");
         SetEnvironmentVariableW(L"LONGSHOT_MINGW", mingw_dir.c_str());
@@ -249,7 +277,7 @@ void run_or_measure_build() {
         SetEnvironmentVariableW(L"LONGSHOT_MEM_RESERVE_GB", L"1.5");
 
         std::wstring cmd = L"\"" + py_exe.wstring() + L"\" -I -u \"" + script.wstring() +
-                           L"\" --romfs \"" + romfs.wstring() + L"\" --exefs \"" + exefs.wstring() +
+                           L"\" --romfs \"" + romfs_folder.wstring() + L"\" --exefs \"" + exefs_folder.wstring() +
                            L"\" --out \"" + out.wstring() + L"\" --work \"" + work.wstring() +
                            L"\" --jobs " + std::to_wstring(p.compile_jobs) + L" --no-prepare-shaders";
 
@@ -322,10 +350,10 @@ void run_or_measure_build() {
     snprintf(line, sizeof line, "CPU: %.0f ms on one thread. Building here in %s mode (%u file(s) at a time): roughly %.1f hours.",
              b.one_ms, p.name, p.compile_jobs, hours);
     S.note(line);
-    if (game_folder.empty()) {
-        S.note("No game files selected. Place your romfs and exefs on a USB drive.");
+    if (romfs_folder.empty() || exefs_folder.empty()) {
+        S.note("Select both a ROMFS folder and an ExeFS folder before building.");
     } else {
-        S.note("Build tools (python, clang/lld) not found in package or drive. You can also build on PC and copy longshot_game.dll to the USB drive.");
+        S.note("Build tools (Python and llvm-mingw) were not found in the app or USB drive.");
     }
     finish();
 }
@@ -351,18 +379,18 @@ DWORD WINAPI game_thread(void* p) {
 }
 
 void play() {
-    fs::path module, game;
+    fs::path module, romfs_folder, drive;
     lx::Model model;
     uint64_t memory_limit;
     {
         std::lock_guard lk(S.m);
         if (S.busy || g_playing) return;
-        if (S.game >= int(S.games.size())) {
-            S.notes.push_back("Choose your game files first.");
+        if (S.romfs < 0 || S.romfs >= int(S.romfs_folders.size())) {
+            S.notes.push_back("Select a ROMFS folder first.");
             return;
         }
-        game = S.games[S.game].folder;
-        module = lx::module_path(drive_of(game));
+        romfs_folder = S.romfs_folders[S.romfs].folder;
+        drive = S.romfs_folders[S.romfs].drive_root;
         model = S.model, memory_limit = S.memory_limit;
         S.busy = true;
     }
@@ -370,6 +398,8 @@ void play() {
         std::lock_guard lk(S.m);
         S.busy = false;
     };
+    if (drive.empty()) drive = romfs_folder.root_path();
+    module = lx::module_path(drive);
     std::error_code ec;
     if (!fs::exists(module, ec)) {
         S.note("No game module yet at " + narrow(module.wstring()) + ": build the game first.");
@@ -415,8 +445,9 @@ void play() {
         pel_unload(m);
         return done();
     }
-    const fs::path work = lx::work_folder(drive_of(game));
-    lx::PlatformPaths paths{narrow(local_folder.wstring()), narrow(game.wstring()), narrow(work.wstring())};
+    const fs::path work = lx::work_folder(drive);
+    const fs::path game_folder = romfs_folder.parent_path();
+    lx::PlatformPaths paths{narrow(local_folder.wstring()), narrow(game_folder.wstring()), narrow(work.wstring())};
     const LongshotUwpPlatform* table =
         lx::platform_init(g_window, paths, uint32_t(model), memory_limit, [](const std::string& s) { S.note(s); });
     if (!set_platform(table)) {
@@ -431,7 +462,7 @@ void play() {
     auto* start = new GameStart{game_main, {"longshot"}};
     const fs::path image = module.parent_path() / "image.bin";
     if (fs::exists(image, ec)) start->args.push_back(narrow(image.wstring()));
-    start->args.insert(start->args.end(), {"--romfs", narrow((game / "romfs").wstring()), "--user", narrow(local_folder.wstring())});
+    start->args.insert(start->args.end(), {"--romfs", narrow(romfs_folder.wstring()), "--user", narrow(local_folder.wstring())});
     g_playing = true;
     // (the game's main thread: a PC's has 8 MB reserved by the build's link; more here, as reserving costs nothing)
     HANDLE t = CreateThread(nullptr, 64u << 20, game_thread, start, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr);
@@ -447,7 +478,7 @@ void play() {
 
 // ---- the window ----
 
-enum Row { kConsole, kMode, kGame, kBuild, kPlay, kRows };
+enum Row { kConsole, kMode, kRomfs, kExefs, kBuild, kPlay, kRows };
 
 struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     IFrameworkView CreateView() { return *this; }
@@ -484,12 +515,12 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
     void Run() {
         window_.Activate();
         local_folder = winrt::Windows::Storage::ApplicationData::Current().LocalFolder().Path().c_str();
-        std::string wanted;
-        load_settings(wanted);
+        std::string wanted_romfs, wanted_exefs;
+        load_settings(wanted_romfs, wanted_exefs);
         S.model = read_model();
         try { S.memory_limit = winrt::Windows::System::MemoryManager::AppMemoryUsageLimit(); } catch (...) {}
         apply_mode();
-        std::thread([wanted] { winrt::init_apartment(); scan_drives(wanted); }).detach();
+        std::thread([wanted_romfs, wanted_exefs] { winrt::init_apartment(); scan_drives(wanted_romfs, wanted_exefs); }).detach();
         init_graphics();
         while (true) {
             window_.Dispatcher().ProcessEvents(CoreProcessEventsOption::ProcessAllIfPresent);
@@ -517,11 +548,16 @@ private:
                 S.mode = lx::Mode((int(S.mode) + 3 + dir) % 3);
             }
             apply_mode();
-        } else if (row_ == kGame) {
+        } else if (row_ == kRomfs || row_ == kExefs) {
             {
                 std::lock_guard lk(S.m);
-                if (S.games.empty()) return;
-                S.game = (S.game + int(S.games.size()) + dir) % int(S.games.size());
+                if (row_ == kRomfs) {
+                    if (S.romfs_folders.empty()) return;
+                    S.romfs = (S.romfs + int(S.romfs_folders.size()) + dir) % int(S.romfs_folders.size());
+                } else {
+                    if (S.exefs_folders.empty()) return;
+                    S.exefs = (S.exefs + int(S.exefs_folders.size()) + dir) % int(S.exefs_folders.size());
+                }
             }
             save_settings();
         }
@@ -529,13 +565,16 @@ private:
 
     void activate() {
         if (row_ == kMode) change(1);
-        if (row_ == kGame) {
-            std::string wanted;
+        if (row_ == kRomfs || row_ == kExefs) {
+            std::string wanted_romfs, wanted_exefs;
             {
                 std::lock_guard lk(S.m);
-                if (S.game < int(S.games.size())) wanted = narrow(S.games[S.game].folder.wstring());
+                if (S.romfs >= 0 && S.romfs < int(S.romfs_folders.size()))
+                    wanted_romfs = narrow(S.romfs_folders[S.romfs].folder.wstring());
+                if (S.exefs >= 0 && S.exefs < int(S.exefs_folders.size()))
+                    wanted_exefs = narrow(S.exefs_folders[S.exefs].folder.wstring());
             }
-            std::thread([wanted] { winrt::init_apartment(); scan_drives(wanted); }).detach();
+            std::thread([wanted_romfs, wanted_exefs] { winrt::init_apartment(); scan_drives(wanted_romfs, wanted_exefs); }).detach();
         }
         if (row_ == kBuild) std::thread(run_or_measure_build).detach();
         if (row_ == kPlay) std::thread(play).detach();
@@ -547,15 +586,20 @@ private:
         std::string console = lx::model_name(S.model);
         if (S.memory_limit) console += ", gives this app " + mb(S.memory_limit);
         std::string mode = S.mode == lx::Mode::automatic ? std::string("Auto (") + p.name + ")" : p.name;
-        std::string game = S.scanning ? "looking..." : S.games.empty() ? "none found (A: look again)"
-                                                                         : narrow(S.games[S.game].folder.wstring()) + "  (" +
-                                                                               mb(S.games[S.game].romfs_bytes) + " of romfs)";
-        if (S.games.size() > 1) game += "  " + std::to_string(S.game + 1) + "/" + std::to_string(S.games.size());
+        auto folder_text = [&](const std::vector<lx::DataFolder>& folders, int selected, bool has_size) {
+            if (S.scanning) return std::string("Scanning USB storage...");
+            if (selected < 0 || selected >= int(folders.size())) return std::string("Not selected  |  A to rescan");
+            std::string value = narrow(folders[selected].folder.wstring());
+            if (has_size) value += "  |  " + mb(folders[selected].bytes);
+            if (folders.size() > 1) value += "  |  " + std::to_string(selected + 1) + "/" + std::to_string(folders.size());
+            return value;
+        };
         return {{"Console", console},
                 {"Mode", "< " + mode + " >   " + p.summary},
-                {"Game files", game},
-                {"Build", S.busy ? "working..." : "A: measure this console and estimate the build"},
-                {"Play", g_playing ? "running" : "A: start the built game"}};
+                {"ROMFS folder", folder_text(S.romfs_folders, S.romfs, true)},
+                {"ExeFS folder", folder_text(S.exefs_folders, S.exefs, false)},
+                {"Build", S.busy ? "Building on console..." : "A: compile the game module on this console"},
+                {"Play", g_playing ? "Game running" : "A: start the built game"}};
     }
 
     void init_graphics() {
@@ -597,15 +641,19 @@ private:
         ctx_->CreateBitmapFromDxgiSurface(surf.get(), &bp, target_.put());
         ctx_->SetTarget(target_.get());
         DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dw_.put_void()));
+        dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                              48.0f, L"en-us", title_.put());
         dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                              44.0f, L"en-us", title_.put());
+                              22.0f, L"en-us", text_.put());
         dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                              24.0f, L"en-us", text_.put());
-        dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-                              19.0f, L"en-us", small_.put());
-        ctx_->CreateSolidColorBrush({0.92f, 0.95f, 0.92f, 1}, fg_.put());
-        ctx_->CreateSolidColorBrush({0.55f, 0.62f, 0.58f, 1}, dim_.put());
-        ctx_->CreateSolidColorBrush({0.16f, 0.42f, 0.26f, 1}, sel_.put());
+                              17.0f, L"en-us", small_.put());
+        ctx_->CreateSolidColorBrush({0.91f, 0.95f, 0.91f, 1}, fg_.put());
+        ctx_->CreateSolidColorBrush({0.59f, 0.68f, 0.61f, 1}, dim_.put());
+        ctx_->CreateSolidColorBrush({0.81f, 0.69f, 0.43f, 1}, accent_.put());
+        ctx_->CreateSolidColorBrush({0.075f, 0.13f, 0.10f, 1}, panel_.put());
+        ctx_->CreateSolidColorBrush({0.10f, 0.18f, 0.14f, 1}, tile_.put());
+        ctx_->CreateSolidColorBrush({0.15f, 0.29f, 0.21f, 1}, selected_.put());
+        ctx_->CreateSolidColorBrush({0.24f, 0.39f, 0.29f, 1}, edge_.put());
         width_ = float(sd.Width);
         height_ = float(sd.Height);
     }
@@ -617,7 +665,14 @@ private:
 
     void draw() {
         if (!ctx_ || lx::present::game_shown()) { Sleep(16); return; }   // (under the game's picture: nothing to draw)
-        const float mx = width_ * 0.06f, my = height_ * 0.07f, row_h = 64, label_w = 220;
+        const float width_scale = width_ / 1920.0f, height_scale = height_ / 1080.0f;
+        const float scale = width_scale < height_scale ? width_scale : height_scale;
+        const float margin = 64.0f * scale;
+        const float left_x = margin, left_w = width_ * 0.60f;
+        const float right_x = left_x + left_w + 24.0f * scale;
+        const float right_w = width_ - margin - right_x;
+        const float content_y = 184.0f * scale, row_h = 78.0f * scale, row_gap = 11.0f * scale;
+        const float radius = 12.0f * scale;
         auto r = rows();
         std::vector<std::string> notes;
         {
@@ -625,21 +680,79 @@ private:
             notes = S.notes;
         }
         ctx_->BeginDraw();
-        ctx_->Clear({0.06f, 0.08f, 0.07f, 1});
-        text("Longshot", title_.get(), fg_.get(), mx, my, 600, 60);
-        text("Ocarina of Time, built from your own game files on this console", small_.get(), dim_.get(), mx, my + 60, width_ - 2 * mx, 30);
-        float y = my + 120;
+        ctx_->Clear({0.035f, 0.055f, 0.043f, 1});
+        ctx_->FillRoundedRectangle(D2D1_ROUNDED_RECT{D2D1_RECT_F{margin - 10 * scale, 48 * scale, margin + 5 * scale,
+                                                                  124 * scale}, 8 * scale, 8 * scale},
+                                   accent_.get());
+        text("LONGSHOT", title_.get(), fg_.get(), margin + 20 * scale, 42 * scale, 760 * scale, 62 * scale);
+        text("XBOX EDITION  /  YOUR GAME FILES STAY ON YOUR STORAGE", small_.get(), dim_.get(), margin + 22 * scale,
+             112 * scale, 1000 * scale, 30 * scale);
+        text("GAME SETUP", small_.get(), accent_.get(), left_x, 154 * scale, left_w, 24 * scale);
+        float y = content_y;
         for (int i = 0; i < kRows; ++i, y += row_h) {
-            if (i == row_) ctx_->FillRectangle(D2D1_RECT_F{mx - 16, y - 8, width_ - mx + 16, y + row_h - 12}, sel_.get());
-            text(r[i].first, text_.get(), fg_.get(), mx, y, label_w, row_h);
-            text(r[i].second, text_.get(), i == row_ ? fg_.get() : dim_.get(), mx + label_w, y, width_ - 2 * mx - label_w, row_h);
+            const auto background = i == row_ ? selected_.get() : tile_.get();
+            ctx_->FillRoundedRectangle(D2D1_ROUNDED_RECT{D2D1_RECT_F{left_x, y, left_x + left_w, y + row_h}, radius, radius}, background);
+            ctx_->DrawRoundedRectangle(D2D1_ROUNDED_RECT{D2D1_RECT_F{left_x, y, left_x + left_w, y + row_h}, radius, radius},
+                                       edge_.get(), 1.0f * scale);
+            if (i == row_)
+                ctx_->FillRoundedRectangle(D2D1_ROUNDED_RECT{D2D1_RECT_F{left_x + 9 * scale, y + 15 * scale,
+                                                                           left_x + 14 * scale, y + row_h - 15 * scale},
+                                                              3 * scale, 3 * scale},
+                                           accent_.get());
+            text(r[i].first, text_.get(), i == row_ ? accent_.get() : dim_.get(), left_x + 26 * scale,
+                 y + 7 * scale, 205 * scale, row_h - 14 * scale);
+            text(r[i].second, small_.get(), i == row_ ? fg_.get() : dim_.get(), left_x + 235 * scale,
+                 y + 6 * scale, left_w - 255 * scale, row_h - 12 * scale);
         }
-        y += 20;
-        for (const std::string& n : notes) {
-            text(n, small_.get(), fg_.get(), mx, y, width_ - 2 * mx, 28);
-            y += 28;
+        const float row_end = y - row_gap;
+        ctx_->FillRoundedRectangle(
+            D2D1_ROUNDED_RECT{D2D1_RECT_F{right_x, content_y, right_x + right_w, row_end}, radius, radius}, panel_.get());
+        ctx_->DrawRoundedRectangle(
+            D2D1_ROUNDED_RECT{D2D1_RECT_F{right_x, content_y, right_x + right_w, row_end}, radius, radius}, edge_.get(), 1.0f * scale);
+        text("QUICK GUIDE", small_.get(), accent_.get(), right_x + 26 * scale, content_y + 24 * scale, right_w - 52 * scale,
+             26 * scale);
+        std::string detail_title = "Ready when you are";
+        std::string detail_body = "Choose your game folders, build the module on the console, then launch it from the selected USB storage.";
+        switch (row_) {
+        case kConsole:
+            detail_title = "Console profile";
+            detail_body = "The app detects the console and applies a conservative graphics profile. Auto is recommended.";
+            break;
+        case kMode:
+            detail_title = "Graphics profile";
+            detail_body = "Use left or right to switch between Auto, Series S and Series X settings.";
+            break;
+        case kRomfs:
+            detail_title = "Select ROMFS";
+            detail_body = "Use left or right to choose a detected romfs folder. Press A to rescan removable storage.";
+            break;
+        case kExefs:
+            detail_title = "Select ExeFS";
+            detail_body = "Choose the matching exefs folder containing main. It can be on a different connected USB drive.";
+            break;
+        case kBuild:
+            detail_title = "Build on console";
+            detail_body = "Build reads the selected folders and keeps generated files on the ROMFS drive. Builds may take hours.";
+            break;
+        case kPlay:
+            detail_title = "Start the game";
+            detail_body = "Play loads Longshot's module from Longshot/game on the selected ROMFS drive.";
+            break;
         }
-        text("D-pad: choose   Left / Right: change   A: select", small_.get(), dim_.get(), mx, height_ - my, width_ - 2 * mx, 30);
+        text(detail_title, text_.get(), fg_.get(), right_x + 26 * scale, content_y + 68 * scale, right_w - 52 * scale,
+             38 * scale);
+        text(detail_body, small_.get(), dim_.get(), right_x + 26 * scale, content_y + 122 * scale, right_w - 52 * scale,
+             row_end - content_y - 140 * scale);
+        const float status_y = 812.0f * scale, status_h = 136.0f * scale;
+        ctx_->FillRoundedRectangle(
+            D2D1_ROUNDED_RECT{D2D1_RECT_F{margin, status_y, width_ - margin, status_y + status_h}, radius, radius}, panel_.get());
+        text("ACTIVITY", small_.get(), accent_.get(), margin + 24 * scale, status_y + 16 * scale, 190 * scale, 24 * scale);
+        const size_t first = notes.size() > 3 ? notes.size() - 3 : 0;
+        float note_y = status_y + 45 * scale;
+        for (size_t i = first; i < notes.size(); ++i, note_y += 27 * scale)
+            text(notes[i], small_.get(), fg_.get(), margin + 24 * scale, note_y, width_ - 2 * margin - 48 * scale, 24 * scale);
+        text("D-pad  Navigate     Left / Right  Change     A  Select / rescan", small_.get(), dim_.get(), margin,
+             height_ - 38 * scale, width_ - 2 * margin, 24 * scale);
         ctx_->EndDraw();
         swap_->Present(1, 0);
     }
@@ -652,9 +765,9 @@ private:
     com_ptr<ID2D1Bitmap1> target_;
     com_ptr<IDWriteFactory> dw_;
     com_ptr<IDWriteTextFormat> title_, text_, small_;
-    com_ptr<ID2D1SolidColorBrush> fg_, dim_, sel_;
+    com_ptr<ID2D1SolidColorBrush> fg_, dim_, accent_, panel_, tile_, selected_, edge_;
     float width_ = 1920, height_ = 1080;
-    int row_ = kMode;
+    int row_ = kRomfs;
 };
 
 }  // namespace

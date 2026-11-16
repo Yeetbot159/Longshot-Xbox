@@ -62,25 +62,38 @@ int main() {
     CHECK(lx::build_hours(0, 587, 24, 259, 1) == 0, "no estimate without figures");
 
     const fs::path drive = fs::temp_directory_path() / "longshot_xbox_test_drive";
+    const fs::path other_drive = fs::temp_directory_path() / "longshot_xbox_test_drive_other";
     fs::remove_all(drive);
+    fs::remove_all(other_drive);
     touch(drive / "OoT" / "romfs" / "a.bin", 1000);
     touch(drive / "OoT" / "exefs" / "main", 10);
     touch(drive / "games" / "copy2" / "romfs" / "b.bin", 500);
     touch(drive / "games" / "copy2" / "exefs" / "main", 10);
+    touch(other_drive / "only-exefs" / "exefs" / "main", 10);
     touch(drive / "a" / "b" / "c" / "romfs" / "deep.bin", 1);   // (three levels down: past the search)
     touch(drive / "a" / "b" / "c" / "exefs" / "main", 1);
     touch(drive / "half" / "romfs" / "x.bin", 1);                // (no exefs\main)
     touch(drive / "Longshot" / "work" / "romfs" / "y.bin", 1);   // (the build's own folder is never a game)
     touch(drive / "Longshot" / "work" / "exefs" / "main", 1);
-    auto found = lx::find_game_folders({drive});
-    bool oot = false, copy2 = false;
-    for (auto& g : found) {
-        oot |= g.folder == drive / "OoT" && g.romfs_bytes == 1000;
-        copy2 |= g.folder == drive / "games" / "copy2" && g.romfs_bytes == 500;
+    auto romfs = lx::find_romfs_folders({drive});
+    bool oot = false, copy2 = false, half = false;
+    for (const auto& f : romfs) {
+        oot |= f.folder == drive / "OoT" / "romfs" && f.bytes == 1000;
+        copy2 |= f.folder == drive / "games" / "copy2" / "romfs" && f.bytes == 500;
+        half |= f.folder == drive / "half" / "romfs" && f.bytes == 1;
     }
-    CHECK(found.size() == 2 && oot && copy2, "two game folders found, their romfs sized; too deep, half and the work folder not");
+    CHECK(romfs.size() == 3 && oot && copy2 && half, "ROMFS folders are selected independently, sized, and limited to two levels");
+    const auto exefs = lx::find_exefs_folders({drive, other_drive});
+    bool oot_exefs = false, copy2_exefs = false, separate_exefs = false;
+    for (const auto& f : exefs) {
+        oot_exefs |= f.folder == drive / "OoT" / "exefs";
+        copy2_exefs |= f.folder == drive / "games" / "copy2" / "exefs";
+        separate_exefs |= f.folder == other_drive / "only-exefs" / "exefs" && f.drive_root == other_drive;
+    }
+    CHECK(exefs.size() == 3 && oot_exefs && copy2_exefs && separate_exefs, "ExeFS folders require main and can be on another drive");
     CHECK(lx::module_path(drive) == drive / "Longshot" / "game" / "longshot_game.dll", "the module's place on the drive");
     fs::remove_all(drive);
+    fs::remove_all(other_drive);
 
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures != 0;

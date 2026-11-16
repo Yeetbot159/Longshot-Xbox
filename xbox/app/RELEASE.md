@@ -3,10 +3,13 @@ driver, but rendering has not yet been verified on a Series S or Series X. The g
 built from the player's own files and are not included.
 
 The current Series S UWP D3D12 device reports shader model 6.4. Mesa Dozen only exposes Vulkan buffer device addresses at
-shader model 6.6, and Longshot's shaders still require them, so this build reports the missing capability and stops
-before loading the game's graphics pipelines. The mesh-to-compute fallback also needs buffer device addresses. This
-UWP device reports mesh shader tier 0; Microsoft's public GDK sample demonstrates mesh shader pipelines on Series
-X|S devkits, so this is a limitation of the current UWP/Dozen path rather than a statement about the hardware.
+shader model 6.6. Without BDA, Longshot now starts in a limited bound-buffer compatibility mode, but arbitrary
+guest-pointer translation and the mesh-to-compute fallback remain unavailable; rendering has not been verified on the
+console. The attached Series S probe came from package 0.2.2.0 and confirmed bounded non-uniform SRV array pipeline
+creation, but reported mesh shader tier 0 and an `E_INVALIDARG` from the older Device3 host-heap test. The current
+probe source separately checks the newer Device13 import API with a full aligned allocation, but that update has not
+yet been run on the console. Microsoft's public GDK sample demonstrates mesh-shader pipelines on Series X|S devkits;
+the UWP tier-0 result describes this UWP/Dozen path, not the console hardware's full GDK capability.
 
 What it does now, on an Xbox Series X|S in Developer Mode:
 
@@ -17,7 +20,7 @@ What it does now, on an Xbox Series X|S in Developer Mode:
 - **Build**: uses the bundled CPython and llvm-mingw tools to try building on the console, one compile job at a time
   with a 3 GB compiler memory budget. The Series S probe confirmed generated code and a child copy of the probe run,
   but did not test Python or clang, so this path remains experimental;
-- **Play**: starts a game module built for the Xbox from your own files (`<drive>\Longshot\work\build\longshot_game.dll`),
+- **Play**: starts a game module built for the Xbox from your own files (`<ROMFS drive>\Longshot\game\longshot_game.dll`),
   with sound. Rendering and full gameplay remain unverified.
 
 The package holds no game and nothing made from one.

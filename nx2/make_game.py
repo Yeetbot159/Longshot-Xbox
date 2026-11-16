@@ -2568,7 +2568,8 @@ def main(a=None):
     # (made again only when the game's shader files, the census or the list itself changed: 4 s and 514 MB written at every update)
     if shader_list_current(work, romfs, os.path.join(out, "longshot_shaders.bin")):
         print("the shader list is the one the last build made from the same files: not made again", flush=True)
-    elif run(shader_census_cmd(romfs, os.path.join(out, "longshot_shaders.bin")), check=False, output=sys.stderr):
+    elif run(shader_census_cmd(romfs, os.path.join(out, "longshot_shaders.bin")), check=False,
+             output=sys.stderr if PREPARE else sys.stdout):
         print("the shader list was not made: the game will compile its shaders as it plays", flush=True)
     else:
         note_shader_list(work, romfs, os.path.join(out, "longshot_shaders.bin"))
@@ -2581,7 +2582,7 @@ def main(a=None):
     # (kept when nothing they are made from changed, in a packaged builder too: the stamp has the builder's release, so the
     # first build after a builder update draws them again)
     elif run(PY + [os.path.join(HERE, "prompt_assets.py"), "--romfs", romfs, "--out", prompts, "--incremental"],
-             check=False, output=sys.stderr):
+             check=False, output=sys.stderr if PREPARE else sys.stdout):
         print("the button prompts of other controllers were not made: the game shows its own", flush=True)
         shutil.rmtree(prompts, ignore_errors=True)
     icon = os.path.join(ROOT, "assets", "longshot.png")

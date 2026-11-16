@@ -1,5 +1,6 @@
 #include "game_files.h"
 
+#include <algorithm>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -8,9 +9,23 @@ namespace longshot_xbox {
 
 namespace {
 
-bool is_game_folder(const fs::path& p) {
+enum class Kind { romfs, exefs };
+
+bool named(const fs::path& p, const wchar_t* expected) {
+    std::wstring name = p.filename().wstring();
+    size_t i = 0;
+    for (; i < name.size() && expected[i]; ++i) {
+        wchar_t c = name[i];
+        if (c >= L'A' && c <= L'Z') c += L'a' - L'A';
+        if (c != expected[i]) return false;
+    }
+    return i == name.size() && expected[i] == L'\0';
+}
+
+bool is_data_folder(const fs::path& p, Kind kind) {
     std::error_code ec;
-    return fs::is_directory(p / "romfs", ec) && fs::is_regular_file(p / "exefs" / "main", ec);
+    if (kind == Kind::romfs) return named(p, L"romfs") && fs::is_directory(p, ec);
+    return named(p, L"exefs") && fs::is_directory(p, ec) && fs::is_regular_file(p / "main", ec);
 }
 
 std::uintmax_t tree_bytes(const fs::path& p) {
@@ -24,9 +39,9 @@ std::uintmax_t tree_bytes(const fs::path& p) {
     return n;
 }
 
-void scan(const fs::path& root, const fs::path& dir, int depth, std::vector<GameFolder>& out) {
-    if (is_game_folder(dir)) {
-        out.push_back({dir, tree_bytes(dir / "romfs"), root});
+void scan(const fs::path& root, const fs::path& dir, int depth, Kind kind, std::vector<DataFolder>& out) {
+    if (is_data_folder(dir, kind)) {
+        out.push_back({dir, kind == Kind::romfs ? tree_bytes(dir) : 0, root});
         return;
     }
     if (depth <= 0) return;
@@ -35,17 +50,22 @@ void scan(const fs::path& root, const fs::path& dir, int depth, std::vector<Game
         std::error_code e2;
         const fs::path name = it->path().filename();
         if (!it->is_directory(e2) || name == "Longshot" || name == "System Volume Information" || name == "$RECYCLE.BIN") continue;
-        scan(root, it->path(), depth - 1, out);
+        scan(root, it->path(), depth - 1, kind, out);
     }
+}
+
+std::vector<DataFolder> find_folders(const std::vector<fs::path>& roots, int depth, Kind kind) {
+    std::vector<DataFolder> out;
+    for (const fs::path& root : roots) scan(root, root, depth + 1, kind, out);
+    std::sort(out.begin(), out.end(), [](const DataFolder& a, const DataFolder& b) { return a.folder.wstring() < b.folder.wstring(); });
+    return out;
 }
 
 }  // namespace
 
-std::vector<GameFolder> find_game_folders(const std::vector<fs::path>& roots, int depth) {
-    std::vector<GameFolder> out;
-    for (const fs::path& r : roots) scan(r, r, depth, out);
-    return out;
-}
+std::vector<DataFolder> find_romfs_folders(const std::vector<fs::path>& roots, int depth) { return find_folders(roots, depth, Kind::romfs); }
+
+std::vector<DataFolder> find_exefs_folders(const std::vector<fs::path>& roots, int depth) { return find_folders(roots, depth, Kind::exefs); }
 
 fs::path work_folder(const fs::path& drive) { return drive / "Longshot" / "work"; }
 fs::path game_out(const fs::path& drive) { return drive / "Longshot" / "game"; }

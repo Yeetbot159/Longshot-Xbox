@@ -828,29 +828,28 @@ void existing_heap_test(Gpu& g, uint8_t* mem, const char* label, ID3D12PipelineS
     R.add(label, fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
 }
 
-// Mesa Dozen's VK_EXT_external_memory_host path uses the newer Device13 API
-// with a one-byte probe size. Test that exact call: Device3's older diagnostic
-// heap API returning E_INVALIDARG does not establish whether Dozen can import
-// the guest allocation.
+// Mesa Dozen's VK_EXT_external_memory_host path uses the newer Device13 API.
+// Report the one-byte diagnostic separately, then test the full aligned allocation
+// even if the one-byte size is rejected.
 void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12PipelineState* pso, ID3D12RootSignature* rs) {
     com_ptr<ID3D12Device13> d13 = g.dev.try_as<ID3D12Device13>();
     if (!d13) { R.add(label, "no ID3D12Device13"); return; }
     for (uint64_t i = 0; i < MB; ++i) mem[i] = uint8_t(i * 7 + 3);
     memset(mem + MB, 0, 2 * MB);
-    HRESULT hr = S_OK;
+    HRESULT size1_result = S_OK;
     {
         com_ptr<ID3D12Heap> heap_probe;
-        hr = d13->OpenExistingHeapFromAddress1(mem, 1, __uuidof(ID3D12Heap), heap_probe.put_void());
+        size1_result = d13->OpenExistingHeapFromAddress1(mem, 1, __uuidof(ID3D12Heap), heap_probe.put_void());
     }
-    if (FAILED(hr)) { R.add(label, "OpenExistingHeapFromAddress1(size=1) " + hr_text(hr)); return; }
     com_ptr<ID3D12Heap> heap;
-    hr = d13->OpenExistingHeapFromAddress1(mem, 16 * MB, __uuidof(ID3D12Heap), heap.put_void());
-    if (FAILED(hr)) { R.add(label, "OpenExistingHeapFromAddress1(size=16MB) " + hr_text(hr)); return; }
+    HRESULT hr = d13->OpenExistingHeapFromAddress1(mem, 16 * MB, __uuidof(ID3D12Heap), heap.put_void());
+    const std::string size1 = "size=1 " + hr_text(size1_result) + "; ";
+    if (FAILED(hr)) { R.add(label, size1 + "size=16MB " + hr_text(hr)); return; }
     D3D12_RESOURCE_DESC bd{D3D12_RESOURCE_DIMENSION_BUFFER, 0, 16 * MB, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
                            D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
     com_ptr<ID3D12Resource> buf;
     hr = g.dev->CreatePlacedResource(heap.get(), 0, &bd, D3D12_RESOURCE_STATE_COMMON, nullptr, __uuidof(ID3D12Resource), buf.put_void());
-    if (FAILED(hr)) { R.add(label, "CreatePlacedResource " + hr_text(hr)); return; }
+    if (FAILED(hr)) { R.add(label, size1 + "CreatePlacedResource " + hr_text(hr)); return; }
     g.begin();
     g.list->CopyBufferRegion(buf.get(), MB, buf.get(), 0, MB);
     if (pso && rs) {
@@ -862,7 +861,7 @@ void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12Pipel
         g.list->Dispatch(16, 1, 1);
     }
     hr = g.run();
-    if (FAILED(hr)) { R.add(label, "GPU work " + hr_text(hr)); return; }
+    if (FAILED(hr)) { R.add(label, size1 + "GPU work " + hr_text(hr)); return; }
     const bool copy_ok = memcmp(mem, mem + MB, MB) == 0;
     std::string shader = "not run";
     if (pso && rs) {
@@ -872,7 +871,7 @@ void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12Pipel
         for (uint64_t i = 1; i < 1024 && ok; ++i) ok = o[i] == i * 0x100000001ull + lanes;
         shader = ok ? fmt("ok (wave of %llu)", (unsigned long long)lanes) : "wrong values";
     }
-    R.add(label, fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
+    R.add(label, size1 + fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
 }
 
 void probe_d3d12() {
