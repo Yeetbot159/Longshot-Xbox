@@ -26,6 +26,12 @@ static void touch(const fs::path& p, size_t bytes) {
     f << std::string(bytes, 'x');
 }
 
+static std::string profile_env(const lx::Profile& p, const std::string& name) {
+    for (const auto& [key, value] : p.env)
+        if (key == name) return value;
+    return {};
+}
+
 int main() {
     CHECK(lx::model_from_device_id(true, lx::kDeviceSeriesS) == lx::Model::series_s, "Series S id");
     CHECK(lx::model_from_device_id(true, lx::kDeviceSeriesX) == lx::Model::series_x, "Series X id");
@@ -41,6 +47,15 @@ int main() {
           "mode keys round-trip, junk is Auto");
     CHECK(lx::series_s().memory_mb < lx::series_x().memory_mb && lx::series_s().compile_jobs < lx::series_x().compile_jobs,
           "the Series S asks for less than the Series X");
+    CHECK(lx::series_s().memory_mb == 5120 && lx::series_s().compile_jobs == 1 &&
+              profile_env(lx::series_s(), "RX_VK_VRAM_MB") == "768" &&
+              profile_env(lx::series_s(), "RX_VK_IMAGE_PREALLOC") == "0" &&
+              profile_env(lx::series_s(), "RX_VK_WORKERS") == "1" &&
+              profile_env(lx::series_s(), "RX_VK_LOAD_WORKERS") == "1",
+          "the Series S profile preserves its memory budget and limits renderer worker concurrency");
+    CHECK(profile_env(lx::series_x(), "RX_VK_WORKERS") == "2" &&
+              profile_env(lx::series_x(), "RX_VK_LOAD_WORKERS") == "2",
+          "the Series X profile uses its larger budget for two renderer workers");
 
     const std::string before = "pad_a=0\r\nquality_preset=5\nsharpness=40\nquality_preset=4\nkey_b=66\n";
     const std::string after = lx::apply_options(before, lx::series_s());

@@ -47,7 +47,7 @@ const Profile& series_s() {
         5120,
         1,
         {{"quality_preset", "1"}, {"output_res", "1920x1080"}, {"frame_rate_cap", "0"}, {"handheld_profile", "0"}},
-        {{"RX_VK_VRAM_MB", "768"}, {"RX_VK_IMAGE_PREALLOC", "0"}},
+        {{"RX_VK_VRAM_MB", "768"}, {"RX_VK_IMAGE_PREALLOC", "0"}, {"RX_VK_WORKERS", "1"}, {"RX_VK_LOAD_WORKERS", "1"}},
     };
     return p;
 }
@@ -60,7 +60,7 @@ const Profile& series_x() {
         8192,
         2,
         {{"quality_preset", "2"}, {"output_res", "2560x1440"}, {"frame_rate_cap", "0"}, {"handheld_profile", "0"}},
-        {{"RX_VK_VRAM_MB", "1536"}, {"RX_VK_IMAGE_PREALLOC", "0"}},
+        {{"RX_VK_VRAM_MB", "1536"}, {"RX_VK_IMAGE_PREALLOC", "0"}, {"RX_VK_WORKERS", "2"}, {"RX_VK_LOAD_WORKERS", "2"}},
     };
     return p;
 }

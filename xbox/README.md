@@ -57,6 +57,11 @@ try to start Python or clang, and this builder has not yet been run on the conso
 memory use during linking, and writable USB discovery are still open. It is an experimental implementation, not a
 verified console build.
 
+The Series S game profile also limits renderer shader/pipeline workers and asynchronous shader-load workers to one
+each; Series X allows two each. This reduces transient compiler concurrency against the consoles' shared CPU/GPU
+memory limits, at the cost of slower shader preparation and first use. These are conservative settings, not a measured
+guarantee that the complete renderer stays within the app's memory ceiling.
+
 The package declares `removableStorage` for the player's USB drive. It does not declare `broadFileSystemAccess`, which
 Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://learn.microsoft.com/en-us/uwp/extension-sdks/uwp-limitations-on-xbox))
 
