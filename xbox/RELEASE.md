@@ -8,6 +8,19 @@ This prerelease contains two game-free packages signed with the included public 
   shader-model 6.4 descriptor-array support and host-memory import behavior.
 - `LongshotXbox.cer` is the public certificate required to install the sideloaded packages.
 
+## Install on a Windows PC
+
+These packages use a self-signed test certificate. Before installing an MSIX on Windows, download `LongshotXbox.cer`
+from this release, open an elevated PowerShell window in the download folder, and run:
+
+```powershell
+Import-Certificate -FilePath .\LongshotXbox.cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+```
+
+This adds the publisher certificate to the computer's Trusted People store; only do this for a certificate from the
+release you intend to install. Then install `Longshot.msix`. Remove the certificate from **Local Computer > Trusted
+People** in `certlm.msc` after testing if you no longer want to trust packages signed by it.
+
 ## What changed
 
 - ROMFS and ExeFS are discovered, selected, and persisted independently. The selected ROMFS and ExeFS folders can
@@ -19,6 +32,9 @@ This prerelease contains two game-free packages signed with the included public 
   stderr protocol, avoiding the reported PowerShell native-command error during the normal build.
 - The probe records whether the one-byte Device13 heap-import query succeeds, then still tests a full aligned 16 MB
   allocation. A rejected one-byte query no longer prevents the meaningful full-size test.
+- Series S caps renderer shader/pipeline and asynchronous shader-load workers at one; Series X caps each at two to
+  reduce transient pressure on shared CPU/GPU memory. This is a concurrency safeguard, not a guarantee that the
+  complete renderer fits the app's memory limit.
 
 ## Experimental status and limitations
 
