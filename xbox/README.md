@@ -1,7 +1,11 @@
+<p align="center">
+  <img src="../assets/branding/xbox-hookshot.png" alt="Longshot Xbox hookshot logo" width="220">
+</p>
+
 # Longshot on Xbox Series X|S (Developer Mode)
 
 An experimental port of Longshot to Xbox consoles in Developer Mode, as a UWP app, the way the Xbox Emulation Hub's
-ports are installed. **It does not play the game yet: there is no picture.** What is here now:
+ports are installed. **Xbox gameplay remains unverified.** What is here now:
 
 - **Longshot** (`xbox/app`), the app a player installs: it finds their game files on a USB drive, has a **Series S**
   and a **Series X** mode, estimates the build on this console, and starts a built game module with its sound,
@@ -72,8 +76,11 @@ Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://lear
 | Frame rate | 60 (`frame_rate_cap=0`) | 60 |
 | Texture budget | 768 MB (`RX_VK_VRAM_MB`) | 1.5 GB |
 | Imported-pool mirror cap | 256 MB (`RX_VK_MIRROR_MB`) | 512 MB |
+| VMA renderer allocation cap | up to 2 GB | up to 4 GB |
 | Image pool at start | off (`RX_VK_IMAGE_PREALLOC=0`) | off |
 | Files compiled at once by the builder | 1 | 2 |
+
+At launch, the renderer cap is at most half of `ExpectedAppMemoryUsageLimit`, further limited to 2 GB on Series S or 4 GB on Series X. If the expected limit is unavailable, the launcher uses a conservative 2 GB cap. VMA's per-heap limits enforce it even when `VK_EXT_memory_budget` is unavailable. This is not a total app-memory boundary: game/host allocations and non-VMA imports are not included; imported mirrors have their separate cap. Microsoft documents that the current `AppMemoryUsageLimit` can grow and that `ExpectedAppMemoryUsageLimit` reports the expected upper cap. The Series S probe measured 5,120 MB; the Series X profile's 8,192 MB still needs an on-console probe.
 
 `xbox\app\test\run.ps1` checks the portable parts on a PC (21 checks): the model ids, the modes' choice, the options
 file kept intact but for the mode's lines, the estimate, and the drive search.

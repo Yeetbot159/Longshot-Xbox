@@ -1,4 +1,4 @@
-"""Write the branded tile pictures a UWP package needs (Assets/*.png) into a folder.
+"""Write the Xbox hookshot-branded tile pictures a UWP package needs (Assets/*.png) into a folder.
 
     python -I xbox/make_assets.py <package folder>
 """
@@ -36,7 +36,7 @@ def load_rgba(path):
         elif kind == b"IEND":
             break
     if bit_depth != 8 or color_type not in (2, 6) or interlace:
-        raise ValueError("the Longshot logo must be a non-interlaced 8-bit RGB or RGBA PNG")
+        raise ValueError("the Xbox hookshot logo must be a non-interlaced 8-bit RGB or RGBA PNG")
 
     channels = 4 if color_type == 6 else 3
     raw = zlib.decompress(compressed)
@@ -133,7 +133,7 @@ def main():
         return 2
     out = os.path.join(sys.argv[1], "Assets")
     os.makedirs(out, exist_ok=True)
-    logo = load_rgba(os.path.join(os.path.dirname(__file__), "..", "assets", "branding", "longshot.png"))
+    logo = load_rgba(os.path.join(os.path.dirname(__file__), "..", "assets", "branding", "xbox-hookshot.png"))
     for name, (w, h) in SIZES.items():
         with open(os.path.join(out, name), "wb") as f:
             f.write(png(w, h, logo))

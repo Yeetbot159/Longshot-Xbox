@@ -126,7 +126,7 @@ function page(title, body, status = 200) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${esc(title)}</title>
   <meta name="description" content="Download the Longshot Launcher for Windows or Linux: it builds the game from your own copy.">
-  <link rel="icon" type="image/png" href="/branding/longshot.png">
+  <link rel="icon" type="image/png" href="/branding/xbox-hookshot.png">
   <meta name="theme-color" content="#0e100f">
   <script>try { const t = localStorage.getItem("starlight-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}</script>
   <style>
@@ -201,7 +201,7 @@ function page(title, body, status = 200) {
 </head>
 <body>
   <header>
-    <a class="home" href="/"><img src="/branding/longshot.png" alt="" width="512" height="512">Longshot</a>
+    <a class="home" href="/"><img src="/branding/xbox-hookshot.png" alt="" width="512" height="512">Longshot</a>
     <nav aria-label="Main navigation">${NAV.map(([label, href]) => `<a href="${href}">${label}</a>`).join("")}</nav>
   </header>
   <main>

@@ -46,9 +46,10 @@ outside click or choosing a link closes it. Shared-memory GPUs have a separate c
 a caution rather than being compared to dedicated VRAM. GPU changes update the
 automatic choice until the user chooses a memory type themselves; Reset restores it.
 
-The team logo, Longshot icon and supplied bean illustrations are copied unchanged
+The team logo, Xbox hookshot app icon and supplied bean illustrations are copied unchanged
 from `../assets/branding/`; their provenance is recorded there. The upstream README's
-own `../assets/longshot.png` is preserved separately.
+own Longshot artwork is preserved as `../assets/longshot-original.png`; the compiled
+game's start-up logo at `../assets/longshot.png` now uses the supplied Xbox hookshot artwork.
 
 Body text and controls use self-hosted Atkinson Hyperlegible Next, weights 200–800,
 upright and italic. Libertinus Serif Semibold remains for large headings; code stays

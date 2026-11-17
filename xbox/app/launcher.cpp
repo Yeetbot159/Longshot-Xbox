@@ -98,6 +98,7 @@ struct State {
     std::mutex m;
     lx::Model model = lx::Model::unknown;
     uint64_t memory_limit = 0;
+    uint64_t expected_memory_limit = 0;
     lx::Mode mode = lx::Mode::automatic;
     std::vector<fs::path> drives;
     std::vector<lx::DataFolder> romfs_folders, exefs_folders;
@@ -383,7 +384,7 @@ DWORD WINAPI game_thread(void* p) {
 void play() {
     fs::path module, romfs_folder, drive;
     lx::Model model;
-    uint64_t memory_limit;
+    uint64_t memory_limit, expected_memory_limit;
     {
         std::lock_guard lk(S.m);
         if (S.busy || g_playing) return;
@@ -393,7 +394,7 @@ void play() {
         }
         romfs_folder = S.romfs_folders[S.romfs].folder;
         drive = S.romfs_folders[S.romfs].drive_root;
-        model = S.model, memory_limit = S.memory_limit;
+        model = S.model, memory_limit = S.memory_limit, expected_memory_limit = S.expected_memory_limit;
         S.busy = true;
     }
     auto done = [] {
@@ -415,8 +416,11 @@ void play() {
         std::lock_guard lk(S.m);
         mode = S.mode;
     }
-    for (const auto& [name, value] : lx::profile_for(mode, model).env)
+    const lx::Profile& profile = lx::profile_for(mode, model);
+    for (const auto& [name, value] : profile.env)
         SetEnvironmentVariableW(widen(name).c_str(), widen(value).c_str());
+    const std::string renderer_cap = std::to_string(lx::renderer_memory_cap_mb(profile, expected_memory_limit));
+    SetEnvironmentVariableW(L"RX_VK_MEMORY_MB", widen(renderer_cap).c_str());
     // (the package's modules: the renderer, Dozen and the TLS slot; DComp.DLL is the app's own, for Dozen's swap chain)
     static const bool modules_ready = [] {
         lx::modules::Config cfg;
@@ -521,6 +525,7 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView> {
         load_settings(wanted_romfs, wanted_exefs);
         S.model = read_model();
         try { S.memory_limit = winrt::Windows::System::MemoryManager::AppMemoryUsageLimit(); } catch (...) {}
+        try { S.expected_memory_limit = winrt::Windows::System::MemoryManager::ExpectedAppMemoryUsageLimit(); } catch (...) {}
         apply_mode();
         std::thread([wanted_romfs, wanted_exefs] { winrt::init_apartment(); scan_drives(wanted_romfs, wanted_exefs); }).detach();
         init_graphics();

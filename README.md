@@ -1,11 +1,16 @@
+<p align="center">
+  <img src="assets/branding/xbox-hookshot.png" alt="Longshot Xbox hookshot logo" width="220">
+</p>
+
 # Longshot Xbox
 
 **Longshot Xbox** is an experimental Xbox Series X|S Developer Mode port maintained in this repository by **Yeetbot159**. It adapts the original [Longshot project](https://git.magicbean.dev/MagicBeanDev/Longshot), a static recompilation of a Nintendo Switch 2 game, for Xbox's UWP app model.
 
 > [!WARNING]
-> **Xbox gameplay is not verified yet.** The launcher and console builder are prototypes. The renderer now continues in a bound-buffer compatibility mode when Vulkan buffer device addresses are unavailable. A PC capability simulation with both BDA and mesh shaders disabled reached and rendered Kokiri Forest, but some draw paths remain unsupported and this has not been tested on Series S. Complete guest pointer translation and the Series S mesh path still need work.
+> **Xbox gameplay is not verified yet.** The launcher and console builder are prototypes. The renderer now includes guest-address translation and a descriptor-backed mesh fallback for systems without Vulkan buffer device addresses; these paths remain experimental, and PC simulation is not proof of Series S gameplay.
 
 This repository contains the Xbox-specific app, renderer packaging, builder, loader, probe, and integration changes. It does not contain the game, game keys, or game-derived files.
+The supplied Xbox hookshot artwork is used for launcher and package branding, the website, and the compiled game's start-up logo.
 
 ## Project status
 
@@ -14,15 +19,17 @@ This repository contains the Xbox-specific app, renderer packaging, builder, loa
 | Launcher app | Builds as a sideloadable UWP package; finds player files on removable storage and selects Series S or Series X build settings. |
 | On-console builder | Prototype packages CPython, its dependencies, and llvm-mingw. It has not yet completed a game build on an Xbox. |
 | Game module and loader | UWP host shims and a PE module loader are included. The module must be built from the player's own files. |
-| Vulkan renderer | `longshot_vk.dll` and Mesa Dozen are packaged. A PC simulation with BDA and mesh shaders disabled rendered the opening game scene; Series S renderer startup and gameplay remain unverified. |
+| Vulkan renderer | `longshot_vk.dll` and Mesa Dozen are packaged. A PC simulation exercised the no-BDA/no-mesh fallback and rendered through Kokiri Forest; Series S renderer startup and gameplay remain unverified. |
 | Capability probe | Measures UWP, memory, storage, input, audio, and D3D12 features. The latest probe source checks Dozen's `ID3D12Device13::OpenExistingHeapFromAddress1` path and GPU access through imported memory. |
 | Series S and X hardware | Series S probe data is available in the task history; no Series X probe result has been collected. Whole-console hardware specifications do not describe the resources available to a UWP app. |
 
 ### Renderer limitation
 
-The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. Longshot's mesh-to-compute fallback also relies on buffer device addresses. Without BDA, the renderer avoids those address-based paths and can proceed with ordinary descriptor-bound buffers; guest pointers not covered by an already-bound storage buffer remain unmapped, and mesh draws remain unavailable. A PC run with `RX_VK_NO_BDA=1` and `RX_VK_NO_MESH=1` rendered through Kokiri Forest, but the log still showed unsupported draws and no Series S run has confirmed the same behavior. Complete guest-pointer translation and mesh rendering are still required for full game support.
+The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. The renderer now translates guest addresses through a bounded pool and has descriptor-backed task/mesh fallback paths when BDA is unavailable. A PC run with `RX_VK_NO_BDA=1` and `RX_VK_NO_MESH=1` reached Kokiri Forest, but unsupported draws remain and no Series S run has confirmed the same behavior.
 
 The reported mesh-shader tier is for the current UWP/Dozen path. Microsoft documents native mesh-shader pipelines on Series X|S devkits through GDK; this UWP measurement does not establish the console silicon's full graphics capabilities.
+
+The Xbox profiles cap VMA-managed renderer allocations at up to 2 GB on Series S and 4 GB on Series X, dynamically limited to half of the expected app-memory limit when the platform reports it. Imported-pool mirrors are capped separately at 256 MB and 512 MB. These are renderer allocator limits, not whole-process limits: game/host allocations and non-VMA imports are not included. The Series S profile is based on a measured 5 GB app limit; the Series X 8 GB profile is not yet verified by a probe.
 
 ## Releases
 

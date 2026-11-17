@@ -1,6 +1,7 @@
 User-supplied branding assets for the local Longshot preview, November 12, 2026.
-Longshot artwork supplied as image 4; magicbean characters supplied as images 1–3.
+Xbox hookshot artwork supplied as "Glowing Xbox Hookshot Grappling Device.png"; magicbean characters supplied as images 1–3.
 Copied byte-for-byte, with no image modifications. No license or authorship inferred.
+The hookshot artwork is also used unchanged as assets/longshot.png for the compiled game's start-up logo; the former image is preserved as assets/longshot-original.png.
 The preview copied these supplied files directly; it did not extract game assets. Included in the website source at the user’s request.
 Teary Elf Bean Adventure.png supplied November 12 for the main hero, copied unchanged as teary-elf-bean.png.
 Grappling Hook Bean Sticker.png supplied November 12 as the replacement hero, copied unchanged as grappling-hook-bean.png.

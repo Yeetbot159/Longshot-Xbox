@@ -14,7 +14,7 @@ export const repositoryAssets = {
     const source = `docs/images/guide/${file}`;
     return [source, source];
   })),
-  ...Object.fromEntries(['longshot.png', 'teary-elf-bean.png', 'grappling-hook-bean.png', 'glowing-fairy-bean.png',
+  ...Object.fromEntries(['xbox-hookshot.png', 'teary-elf-bean.png', 'grappling-hook-bean.png', 'glowing-fairy-bean.png',
     'magicbean-green.png', 'magicbean-red.png', 'magicbean-blue.png', 'magicbean-team-logo.webp', 'PROVENANCE.txt']
     .map((name) => [`assets/branding/${name}`, `branding/${name}`])),
 };
