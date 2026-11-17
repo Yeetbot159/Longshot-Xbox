@@ -56,6 +56,8 @@
 #include "vk_draw.h"
 #include "vk_progcache.h"
 #include "vk_menu.h"
+#include "guest_address_table.h"
+#include "mesh_fallback_buffers.h"
 
 // (EvilOOT, RX_VK_PTR_DIAG) the pointer pass's counts for this thread's translations
 // (global_memory_to_storage_buffer_pass.cpp, declared by hand so no Eden header changes)
@@ -656,6 +658,9 @@ Shader::HostTranslateInfo host_info() {
     h.support_snorm_render_buffer = true;
     h.support_viewport_index_layer = true;
     h.min_ssbo_alignment = storage_binding_align();
+    h.max_per_stage_descriptor_storage_buffers = dev.props.limits.maxPerStageDescriptorStorageBuffers;
+    h.max_per_stage_resources = dev.props.limits.maxPerStageResources;
+    h.max_descriptor_set_storage_buffers = dev.props.limits.maxDescriptorSetStorageBuffers;
     h.support_geometry_shader_passthrough = false;
     h.support_conditional_barrier = true;   // (barriers in loops kept: see the WebGPU renderer's 4f5e3e6)
     return h;
@@ -712,7 +717,24 @@ std::unique_ptr<Translation> translate(Env& env, bool graphics, bool one_exit = 
     Shader::Maxwell::Flow::CFG cfg{env, t->pools->flow_blocks,
                                    env.StartAddress() + (graphics ? static_cast<u32>(sizeof(Shader::ProgramHeader)) : 0u),
                                    one_exit};
-    t->program = Shader::Maxwell::TranslateProgram(t->pools->insts, t->pools->blocks, env, cfg, host_info());
+    const Shader::HostTranslateInfo host = host_info();
+    t->program = Shader::Maxwell::TranslateProgram(t->pools->insts, t->pools->blocks, env, cfg, host);
+    const bool guest_pool_fallback = !dev.vk12.bufferDeviceAddress && dev.external_memory_host && dev.features.shaderInt64;
+    if (t->program.info.uses_global_memory && guest_pool_fallback) {
+        static std::atomic<int> logged{0};
+        const bool added = Shader::GuestAddressTable::AddDescriptors(
+            t->program.info, host, true, env_on("RX_VK_FOLLOW_STORES"));
+        if (logged++ < 12) {
+            if (added) {
+                logf("vk: guest-pool fallback added to %016llx (%u pools, reads bounded to 64 MB)",
+                     (unsigned long long)env.StartAddress(), Shader::GuestAddressTable::kPoolCount);
+            } else {
+                logf("vk: guest-pool fallback not added to %016llx: %zu SSBO bindings, limits %u per stage / %u per set",
+                     (unsigned long long)env.StartAddress(), t->program.info.storage_buffers_descriptors.size(),
+                     host.max_per_stage_descriptor_storage_buffers, host.max_descriptor_set_storage_buffers);
+            }
+        }
+    }
     return t;
 }
 
@@ -1244,10 +1266,17 @@ uint64_t translator_stamp() {
     // lost it)
     const uint64_t translator = LONGSHOT_SHADER_STAMP;
     add(&translator, sizeof translator);
+    const uint32_t guest_pool_fallback =
+        !dev.vk12.bufferDeviceAddress && dev.external_memory_host && dev.features.shaderInt64
+            ? Shader::GuestAddressTable::kPoolCount
+            : 0;
+    add(&guest_pool_fallback, sizeof guest_pool_fallback);
     const uint32_t depth = host->depth_minus_w() != 0;   // (d3zessete's PR 54: programs made in either depth mode are kept apart)
     add(&depth, sizeof depth);
     // (and a GPU's mesh shaders: a file of native task and mesh programs is no use to the compute fallback, nor its to one)
-    const uint32_t mesh = (dev.mesh_shader ? 1u : 0u) | (dev.mesh_fallback ? 2u : 0u) | (dev.task_mesh_fallback ? 4u : 0u);
+    const uint32_t mesh = (dev.mesh_shader ? 1u : 0u) | (dev.mesh_fallback ? 2u : 0u) |
+                          (dev.task_mesh_fallback ? 4u : 0u) |
+                          ((dev.mesh_fallback || dev.task_mesh_fallback) && !dev.vk12.bufferDeviceAddress ? 8u : 0u);
     add(&mesh, sizeof mesh);
     // (and what of the GPU the translator is told (make_profile): its warps' lanes and the driver's shuffle workaround, and
     // which stages it pins to 32 lanes, which keep the short path: profile_graphics. An explicit warp override bypasses
@@ -1572,17 +1601,24 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
         std::vector<std::vector<uint32_t>> kept;   // (each stage's SPIR-V, for the program cache: mesh programs were never kept,
                                                    // so each was translated and its pipeline built in the middle of play, every run)
         const bool fallback = p.fallback;
+        const bool fallback_storage_buffers = p.fallback_storage_buffers;
+        const Shader::HostTranslateInfo fallback_host = host_info();
         std::unique_ptr<Translation> task_t;
         const std::array<u32, 3> mesh_regs = mesh_registers_of(task, mesh);
         if (task) {
             Env env{s, *task, Shader::Stage::Task};
             env.set_mesh(mesh_regs, nullptr);
             task_t = translate(env, true, true);
+            if (fallback_storage_buffers &&
+                !Shader::MeshFallbackBuffers::AddDescriptors(task_t->program.info, fallback_host, true)) {
+                throw Shader::LogicError("mesh fallback task descriptors exceed the host limits");
+            }
             mesh_nocull(task_t->program, task->key);
             dump_ir(p, "task", task_t->program, task->key);
             Shader::RuntimeInfo rt{};
             rt.previous_stage_stores.mask.set();
             rt.mesh_fallback = fallback;
+            rt.mesh_fallback_storage_buffers = fallback_storage_buffers;
             rt.mesh_fallback_capacity = Shader::Backend::SPIRV::MESH_FALLBACK_CAPACITY;
             const std::vector<uint32_t> spirv = Shader::Backend::SPIRV::EmitSPIRV(fallback ? profile_pinned() : profile_graphics(VK_SHADER_STAGE_TASK_BIT_EXT), rt, task_t->program, bindings);
             kept.push_back(spirv);
@@ -1597,6 +1633,10 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
         Env menv{s, mesh, Shader::Stage::Mesh};
         menv.set_mesh(mesh_regs, prim ? prim->sph : nullptr);
         auto mesh_t = translate(menv, true, true);
+        if (fallback_storage_buffers &&
+            !Shader::MeshFallbackBuffers::AddDescriptors(mesh_t->program.info, fallback_host, false)) {
+            throw Shader::LogicError("mesh fallback mesh descriptors exceed the host limits");
+        }
         dump_ir(p, "mesh", mesh_t->program, mesh.key);
         {
             static std::atomic<int> told{0};
@@ -1617,6 +1657,7 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
         else mrt.previous_stage_stores.mask.set();
         mrt.convert_depth_mode = host->depth_minus_w() != 0;
         mrt.mesh_fallback = fallback;
+        mrt.mesh_fallback_storage_buffers = fallback_storage_buffers;
         mrt.mesh_fallback_capacity = Shader::Backend::SPIRV::MESH_FALLBACK_CAPACITY;
         mrt.mesh_fallback_task = task_t != nullptr;
         mrt.mesh_fallback_task_threads = task_t ? task_t->program.workgroup_size[0] : 0;
@@ -1633,6 +1674,7 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
             const Shader::MeshInfo& mi = mesh_t->program.mesh;
             Shader::RuntimeInfo vrt{};
             vrt.mesh_fallback = true;
+            vrt.mesh_fallback_storage_buffers = fallback_storage_buffers;
             vrt.mesh_fallback_vertex = true;
             vrt.mesh_fallback_capacity = Shader::Backend::SPIRV::MESH_FALLBACK_CAPACITY;
             vrt.convert_depth_mode = host->depth_minus_w() != 0;
@@ -1642,6 +1684,10 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
             Shader::Info saved_info{std::move(mesh_t->program.info)};
             mesh_t->program.info = Shader::Info{};
             mesh_t->program.info.stores = saved_info.stores;
+            if (fallback_storage_buffers &&
+                !Shader::MeshFallbackBuffers::AddDescriptors(mesh_t->program.info, fallback_host, false)) {
+                throw Shader::LogicError("mesh fallback vertex descriptors exceed the host limits");
+            }
             mesh_t->program.stage = Shader::Stage::VertexB;
             for (const u32 line : mi.primitive_lines) {
                 const auto attribute = static_cast<Shader::IR::Attribute>(line);
@@ -1650,17 +1696,20 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
             }
             const std::vector<uint32_t> vspirv =
                 Shader::Backend::SPIRV::EmitSPIRV(profile_graphics(VK_SHADER_STAGE_VERTEX_BIT), vrt, mesh_t->program, bindings);
+            Shader::Info fallback_vertex_info{std::move(mesh_t->program.info)};
             mesh_t->program.info = std::move(saved_info);
             mesh_t->program.stage = saved_stage;
             kept.push_back(vspirv);
             Stage v;
             v.nvn_stage = 0;
             v.vk_stage = VK_SHADER_STAGE_VERTEX_BIT;
+            v.info = std::move(fallback_vertex_info);
             v.module = make_module(vspirv);
             v.c1 = mesh.c1;
             p.stages.push_back(std::move(v));
             const u32 topo{mesh.topology == 3 ? 4u : mesh.topology == 1 ? 0u : mesh.topology};
             p.fallback = true;
+            p.fallback_storage_buffers = fallback_storage_buffers;
             p.fallback_task = task_t != nullptr;
             p.fallback_task_threads = task_t ? task_t->program.workgroup_size[0] : 1;
             p.fallback_topology = topo == 0 ? VK_PRIMITIVE_TOPOLOGY_POINT_LIST
@@ -1725,6 +1774,21 @@ void translate_mesh_into(Program& p, const NvnState& s, const Code* task, const 
         }
         for (const Stage& st : p.stages)
             if (!st.module) throw Shader::LogicError("vkCreateShaderModule failed");
+        if (fallback_storage_buffers) {
+            std::vector<u32> per_stage_storage_buffers;
+            per_stage_storage_buffers.reserve(p.stages.size());
+            for (const Stage& st : p.stages) {
+                u32 count = 0;
+                for (const auto& descriptor : st.info.storage_buffers_descriptors) {
+                    count += descriptor.count;
+                }
+                per_stage_storage_buffers.push_back(count);
+            }
+            if (!Shader::MeshFallbackBuffers::FitsDescriptorSetStorageBuffers(
+                    per_stage_storage_buffers, fallback_host.max_descriptor_set_storage_buffers)) {
+                throw Shader::LogicError("mesh fallback storage buffers exceed the descriptor-set limit");
+            }
+        }
         record_answers(p, s);   // (task questions not counted: kept conservative)
         (void)questions;
         ptr_diag_log(p.key, task ? "task+mesh" : "mesh");
@@ -1781,6 +1845,7 @@ const Program* mesh_program_locked(const NvnState& s, const uint8_t color_types[
     p->key = key;
     p->mesh = !fallback;
     p->fallback = fallback;
+    p->fallback_storage_buffers = fallback && !dev.vk12.bufferDeviceAddress;
     std::memcpy(p->codes, codes, sizeof codes);
     Program* raw = p.get();
     variants.push_back(std::move(p));
@@ -2271,6 +2336,7 @@ std::unique_ptr<Program> seed_translate(const SeedStage* const by_stage[8], cons
     const bool mesh = by_stage[7] != nullptr;
     if (mesh && !dev.mesh_shader && !dev.mesh_fallback) return nullptr;
     p->fallback = mesh && dev.uses_mesh_fallback(by_stage[6] != nullptr);
+    p->fallback_storage_buffers = p->fallback && !dev.vk12.bufferDeviceAddress;
     p->mesh = mesh && !p->fallback;
     if (mesh)
         translate_mesh_into(*p, *blank, by_stage[6] ? &code[6] : nullptr, code[7], nullptr, by_stage[1] ? &code[1] : nullptr, color_types);
@@ -2465,6 +2531,7 @@ static const Program* seed_variant_made(const uint64_t code[3], bool mesh, const
                   : graphics_key(code_of[0], fs, attributes, color_types, p->scene_tonemap);
     if (mesh && !dev.mesh_shader && !dev.mesh_fallback) return nullptr;
     p->fallback = mesh && dev.uses_mesh_fallback(by_stage[6] != nullptr);
+    p->fallback_storage_buffers = p->fallback && !dev.vk12.bufferDeviceAddress;
     p->mesh = mesh && !p->fallback;
     p->codes[0] = code[0], p->codes[1] = code[1], p->codes[2] = code[2];
     if (questions) questions_in = questions, questions_at = 0, answers_in = answers;

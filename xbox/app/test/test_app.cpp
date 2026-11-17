@@ -49,13 +49,15 @@ int main() {
           "the Series S asks for less than the Series X");
     CHECK(lx::series_s().memory_mb == 5120 && lx::series_s().compile_jobs == 1 &&
               profile_env(lx::series_s(), "RX_VK_VRAM_MB") == "768" &&
+              profile_env(lx::series_s(), "RX_VK_MIRROR_MB") == "256" &&
               profile_env(lx::series_s(), "RX_VK_IMAGE_PREALLOC") == "0" &&
               profile_env(lx::series_s(), "RX_VK_WORKERS") == "1" &&
               profile_env(lx::series_s(), "RX_VK_LOAD_WORKERS") == "1",
-          "the Series S profile preserves its memory budget and limits renderer worker concurrency");
+          "the Series S profile caps renderer memory and limits worker concurrency");
     CHECK(profile_env(lx::series_x(), "RX_VK_WORKERS") == "2" &&
-              profile_env(lx::series_x(), "RX_VK_LOAD_WORKERS") == "2",
-          "the Series X profile uses its larger budget for two renderer workers");
+              profile_env(lx::series_x(), "RX_VK_LOAD_WORKERS") == "2" &&
+              profile_env(lx::series_x(), "RX_VK_MIRROR_MB") == "512",
+          "the Series X profile uses its larger memory cap for two renderer workers");
 
     const std::string before = "pad_a=0\r\nquality_preset=5\nsharpness=40\nquality_preset=4\nkey_b=66\n";
     const std::string after = lx::apply_options(before, lx::series_s());

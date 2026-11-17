@@ -178,6 +178,10 @@ struct BufferRef {
         return buffer != VK_NULL_HANDLE;
     }
 };
+struct GuestPoolBinding {
+    uint64_t guest = 0;
+    BufferRef buffer{};
+};
 bool memory_init();                                   // vk_memory.cpp
 void memory_cpu_owned(uint64_t guest, uint64_t size);   // (longshot: words the replay writes on the CPU, left out of write-backs)
 // (longshot) The replay's own CPU writes of guest memory, by GPU address: every one goes through guest_cpu_write (or, for a
@@ -195,6 +199,7 @@ BufferRef gpu_buffer(uint64_t gpu, uint64_t size);   // (empty when no pool hold
 /// A range as a binding of the replay sees it: the pool's VRAM mirror when it has one (vk_memory.cpp), else the
 /// imported pool. written: the GPU may write it (copied back to guest memory at the submission's end).
 BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written);
+size_t memory_guest_pool_bindings(GuestPoolBinding* out, size_t capacity, bool written, bool* overflow);
 BufferRef stream_copy(const void* src, uint64_t n);   // vk_draw.cpp: bytes in the recording's stream, as a binding
 /// Authored constants in the recording's stream: never recycled until its recording completes.
 /// Fill mapped, then flush memory through binding.offset + binding.size before GPU use.

@@ -20,7 +20,7 @@ constexpr VkBufferUsageFlags VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 4;
 constexpr VkBufferUsageFlags VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = 8;
 constexpr int VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO = 1;
 struct VkBufferDeviceAddressInfo { int sType; VkBuffer buffer = 0; };
-struct { int device = 1; } dev;
+struct { int device = 1; struct { bool bufferDeviceAddress = true; } vk12; } dev;
 namespace Shader::Backend::SPIRV {
 constexpr uint64_t MESH_FALLBACK_CAPACITY = 5, MESH_FALLBACK_HEADER_WORDS = 8, MESH_FALLBACK_RECORD_WORDS = 16;
 }
@@ -29,7 +29,7 @@ struct Program {
     uint32_t fallback_record_words = 4;
     uint32_t fallback_payload_words = 2;
     uint32_t fallback_task_threads = 2;
-    bool fallback_task = true;
+    bool fallback_task = true, fallback_storage_buffers = false;
 };
 
 static std::array<Allocation, 16> allocations;
@@ -37,13 +37,15 @@ static Allocation poison;
 static std::unordered_map<VkBuffer, VmaAllocation> live;
 static unsigned create_calls, destroy_calls, address_calls;
 static unsigned fail_create, zero_address;
+static VkBufferUsageFlags last_usage;
 static void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
-static bool create_buffer(uint64_t size, VkBufferUsageFlags, bool,
+static bool create_buffer(uint64_t size, VkBufferUsageFlags usage, bool,
                           VkBuffer& buffer, VmaAllocation& allocation, void**) {
     require(size != 0, "fixture received a zero allocation size");
     ++create_calls;
+    last_usage = usage;
     if (create_calls == fail_create) {
         // An output written on failure must never be treated as a confirmed allocation.
         buffer = 0xffff;
@@ -107,6 +109,18 @@ static void success_reuse(bool task) {
     require(fallback_buffers_of(p, out) && out == same && create_calls == calls,
             "successful reuse changed");
 }
+static void no_bda_success() {
+    Program p;
+    p.fallback_storage_buffers = true;
+    dev.vk12.bufferDeviceAddress = false;
+    FallbackBuffers* out = nullptr;
+    require(fallback_buffers_of(p, out), "no-BDA descriptor buffers failed to initialize");
+    require(out && out->records && out->payload && !out->records_address && !out->payload_address,
+            "no-BDA buffers were not published as descriptor-backed resources");
+    require(address_calls == 0 && !(last_usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT),
+            "no-BDA initialization requested a device address");
+    require(out->records_bytes == 96 && out->payload_bytes == 44, "no-BDA allocation sizes changed");
+}
 static void run(const std::string& name) {
     Program p;
     FallbackBuffers* out = nullptr;
@@ -143,6 +157,8 @@ static void run(const std::string& name) {
         success_reuse(false);
     } else if (name == "task_success") {
         success_reuse(true);
+    } else if (name == "no_bda_success") {
+        no_bda_success();
     } else if (name == "invalid_program") {
         p.fallback_record_words = 0;
         require(!fallback_buffers_of(p, out), "invalid program was accepted");

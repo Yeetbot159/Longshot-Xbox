@@ -27,8 +27,12 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
   `<drive>\Longshot\game\ExeFS\main` layout without scanning the build-work directory.
 - XAudio initialization and reset handling now report failures and wait for queued buffers to drain before freeing a
   stream. The probe also creates a stereo source voice, plays a brief tone, and records its completion callback.
-- When Vulkan BDA is unavailable, the renderer log now records fixed-array indexing, descriptor indexing, host-memory
-  import, and descriptor limits together to guide a future bounded guest-address implementation.
+- When Vulkan BDA is unavailable, the renderer can translate global-memory loads through a bounded table of up to
+  eight imported pools exposed to the current recording. Each pool is limited to 64 MiB of guest address space;
+  opt-in global stores are limited to 1 MiB per pool and remain disabled by default.
+- Mesh/task draws also have a descriptor-backed compute fallback when BDA is unavailable, including indirect task
+  input. It requires host-memory import, shader int64, and sufficient descriptor limits; this implementation has not
+  yet been validated on Xbox.
 - ROMFS and ExeFS are discovered, selected, and persisted independently. The selected ROMFS and ExeFS folders can
   reside on different removable drives. Build work stays under `<ROMFS drive>\Longshot\work`, and the game module is
   installed under `<ROMFS drive>\Longshot\game`.
@@ -51,13 +55,18 @@ probe tests a full-size `ID3D12Device13::OpenExistingHeapFromAddress1` import an
 result has been collected from the console.
 
 When Vulkan buffer device addresses (BDA) are unavailable, the renderer enters a limited bound-buffer compatibility
-mode. Arbitrary guest-pointer translation and the mesh compute fallback still require implementation; rendering and
-full gameplay have not been verified on Series S or Series X. The UWP/Dozen mesh-tier result describes this app path,
-not the console silicon's separate GDK capabilities. The Series S probe also measured a 5,120 MB app memory limit
-and a 4,864 MB CPU commit ceiling. Current upstream Dozen gates BDA and descriptor indexing at D3D12 shader model 6.6;
-the reported 6.4 path supports fixed-size dynamically indexed storage-buffer arrays but not nonuniform indexing or
-runtime descriptor arrays. A bounded guest-address table still needs implementation and validation against the
-adapter's descriptor budget. On-console Python/clang building and a Series X probe remain unverified.
+mode. A bounded guest-address table is implemented: it searches up to eight imported pools with statically indexed
+storage-buffer descriptors, and only translates accesses within the configured ranges. Pointers outside those ranges
+remain unsupported. The mesh-to-compute fallback has an experimental descriptor-backed no-BDA path, gated on
+host-memory import, shader int64, and descriptor capacity. Neither it nor imported-pool access has been validated on
+console; rendering and full gameplay remain unverified on Series S or Series X. The UWP/Dozen mesh-tier result
+describes this app path, not the console silicon's separate GDK capabilities. The Series S probe also measured a
+5,120 MB app memory limit and a 4,864 MB CPU commit ceiling. Current upstream Dozen gates BDA and descriptor indexing
+at D3D12 shader model 6.6; the reported 6.4 path supports fixed-size dynamically indexed storage-buffer arrays but not
+nonuniform indexing or runtime descriptor arrays. Dozen storage-buffer array binding and imported-pool access remain
+unverified on console. The available Series S probe report is from package 0.2.5.0 and is incomplete before the D3D12
+results; the newer Device13 import test has not yet been run there. On-console Python/clang building and a Series X
+probe also remain unverified.
 
 The packages contain no game files or data derived from a game. The certificate is public and contains no private
 signing key. After installing, set the app type to **Game** in Dev Home for useful memory measurements.

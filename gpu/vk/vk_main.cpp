@@ -657,7 +657,7 @@ bool create_device() {
              limits.maxPerStageDescriptorStorageBuffers, limits.maxDescriptorSetStorageBuffers,
              f.features.shaderInt64 ? "yes" : "no");
         logf("vk: no VK_KHR_buffer_device_address: starting in bound-buffer compatibility mode; "
-             "physical guest pointers and mesh compute fallback are disabled");
+             "guest pools and mesh fallback require host import, shader int64, and descriptor capacity");
     }
     mesh.multiviewMeshShader = mesh.primitiveFragmentShadingRateMeshShader = VK_FALSE;   // (not used)
     // (diagnostics) reproduce the Series S UWP mesh tier on a desktop device for local smoke tests.
@@ -670,9 +670,14 @@ bool create_device() {
     // (task and mesh shader counts in pipeline statistics, a feature of their own: RADV has it off on RDNA2, and a query
     // pool made with those counts all the same can hang the GPU)
     dev.mesh_queries = dev.mesh_shader && mesh.meshShaderQueries;
-    // (longshot, issue 640) RDNA1 and older GPUs: no mesh shaders, but task and mesh programs run as compute shaders
-    // that write their vertices to buffers, drawn through an ordinary graphics pipeline. It needs buffer device addresses.
-    dev.mesh_fallback = !dev.mesh_shader && f12.bufferDeviceAddress && !env_on("RX_VK_NO_MESH_FALLBACK");
+    // (longshot, issue 640) Mesh programs can run as compute shaders and hand their outputs to a vertex stage through
+    // device addresses, or through fixed storage-buffer descriptors on the no-BDA path.
+    const bool mesh_fallback_no_bda = dev.external_memory_host && f.features.shaderInt64 &&
+                                      dev.props.limits.maxPerStageDescriptorStorageBuffers >= 12 &&
+                                      dev.props.limits.maxDescriptorSetStorageBuffers >= 12 &&
+                                      dev.props.limits.maxPerStageResources >= 12;
+    const bool mesh_fallback_supported = f12.bufferDeviceAddress || mesh_fallback_no_bda;
+    dev.mesh_fallback = !dev.mesh_shader && mesh_fallback_supported && !env_on("RX_VK_NO_MESH_FALLBACK");
     if (dev.mesh_fallback) logf("vk: no mesh shaders: task and mesh programs run as compute shaders (issue 640 fallback)");
     logf("vk: console capability path: buffer device address %s, shader int64 %s, mesh shader %s, mesh compute fallback %s, "
          "EDS3 polygon/clamp/blend/alpha-to-coverage %s/%s/%s/%s",
@@ -688,7 +693,8 @@ bool create_device() {
 #endif
     if (mesh_mode == 1) task_mesh_fallback = false;   // (Native: the card's own mesh shaders for every draw)
     if (const char* e = getenv("RX_VK_TASK_MESH_FALLBACK")) task_mesh_fallback = atoi(e) != 0;
-    dev.task_mesh_fallback = task_mesh_fallback && dev.mesh_shader && f12.bufferDeviceAddress && !env_on("RX_VK_NO_MESH_FALLBACK");
+    dev.task_mesh_fallback = task_mesh_fallback && dev.mesh_shader && mesh_fallback_supported &&
+                             !env_on("RX_VK_NO_MESH_FALLBACK");
     if (dev.task_mesh_fallback) logf("vk: task + mesh programs use the compute fallback (RX_VK_TASK_MESH_FALLBACK=0: native)");
     logf("vk: mesh shaders: %s, from %s: %s", mesh_mode == 2 ? "Compute" : mesh_mode == 1 ? "Native" : "Automatic",
          mesh_choice.why, dev.mesh_shader ? (dev.task_mesh_fallback ? "native, task + mesh draws on the compute path" : "native")

@@ -4,8 +4,8 @@ The console writes a mesh program's vertices and primitives to an internal stage
 VK_EXT_mesh_shader hands them to the rasterizer from there. A replay only needs the records: here the
 task and mesh programs are ordinary compute shaders, their epilogues write the vertices to a record
 buffer, and a generated vertex stage (drawing an ordinary graphics pipeline) reads one corner a
-vertex from it. This checks that path end to end in the sources: the device enables it with buffer
-device addresses, the translator builds the compute stages and the generated vertex stage, the
+vertex from it. This checks that path end to end in the sources: it uses device addresses where
+available and fixed storage-buffer descriptors on the no-BDA path, the translator builds the compute stages and the generated vertex stage, the
 dispatches run before the pass, and the draw uses the GPU-written record count.
 
 python -I -B tests/test_mesh_fallback.py
@@ -30,6 +30,7 @@ HEADER = VK / "vk_shader.h"
 EMIT = VK / "eden" / "shader_recompiler" / "backend" / "spirv" / "emit_spirv.cpp"
 MESH = VK / "eden" / "shader_recompiler" / "backend" / "spirv" / "emit_spirv_mesh.cpp"
 SPIRV = VK / "eden" / "shader_recompiler" / "backend" / "spirv" / "emit_spirv.h"
+SPIRV_CONTEXT = VK / "eden" / "shader_recompiler" / "backend" / "spirv" / "spirv_emit_context.cpp"
 VMA = VK / "vk_vma.cpp"
 
 
@@ -45,8 +46,11 @@ def block(text, marker):
 
 def main():
     main_cpp = MAIN.read_text(encoding="utf-8")
-    if "dev.mesh_fallback = !dev.mesh_shader && f12.bufferDeviceAddress" not in main_cpp:
-        raise SystemExit("vk_main.cpp: no fallback without buffer device addresses")
+    if "mesh_fallback_supported = f12.bufferDeviceAddress || mesh_fallback_no_bda;" not in main_cpp or \
+            "dev.mesh_fallback = !dev.mesh_shader && mesh_fallback_supported" not in main_cpp:
+        raise SystemExit("vk_main.cpp: no bounded storage-buffer fallback without buffer device addresses")
+    if "dev.external_memory_host && f.features.shaderInt64" not in main_cpp:
+        raise SystemExit("vk_main.cpp: the no-BDA fallback is not gated on its required features")
     if "issue 640 fallback" not in main_cpp:
         raise SystemExit("vk_main.cpp: the fallback is not logged")
     if "if (!dev.mesh_shader && !dev.mesh_fallback" not in main_cpp:
@@ -69,8 +73,11 @@ def main():
     if "mesh_t->program.info = Shader::Info{};" not in translate or \
             "mesh_t->program.info.stores = saved_info.stores;" not in translate:
         raise SystemExit("the generated vertex stage is not emitted with only the mesh program's stores")
-    if "v.info = mesh_t->program.info;" in translate:
-        raise SystemExit("the vertex stage still declares the mesh program's descriptors")
+    if "v.info = std::move(fallback_vertex_info);" not in translate:
+        raise SystemExit("the generated vertex stage does not keep its fallback-buffer descriptors")
+    if "MeshFallbackBuffers::AddDescriptors" not in translate or \
+            "rt.mesh_fallback_storage_buffers = fallback_storage_buffers;" not in translate:
+        raise SystemExit("the fallback storage-buffer descriptors are not added to task and mesh stages")
     if "vrt.per_primitive_generics.set(" not in translate:
         raise SystemExit("the generated vertex stage does not know the mesh program's per-primitive generics")
     if "fs->program.info.interpolation[" not in translate or "Shader::Interpolation::Flat" not in translate:
@@ -89,8 +96,14 @@ def main():
         raise SystemExit("native mesh shaders were removed")
 
     mesh = MESH.read_text(encoding="utf-8")
+    spirv_context = SPIRV_CONTEXT.read_text(encoding="utf-8")
     if "void MeshFallbackEpilogue(" not in mesh or "void EmitMeshFallbackVertexBody(" not in mesh:
         raise SystemExit("the fallback epilogue or vertex body is missing")
+    if "ctx.MeshFallbackWord(member, word)" not in mesh or \
+            "BufferWord(ctx, ctx.mesh_fallback_indirect_input_member_index, ctx.Const(3U))" not in mesh:
+        raise SystemExit("the no-BDA mesh stages do not use their fixed storage-buffer descriptors")
+    if spirv_context.count("if (!mesh_fallback_storage_buffers)") < 2:
+        raise SystemExit("the no-BDA mesh fallback still declares physical-storage-buffer addressing")
     if "AddLocalVariable" in block(mesh, "void Strided("):
         raise SystemExit("the strided copies declare a function variable mid-function (spirv-val rejects it)")
     task = block(mesh, "void TaskEpilogue(")
@@ -99,7 +112,7 @@ def main():
     if "PushU64(ctx, MESH_FALLBACK_" in mesh:
         raise SystemExit("a push constant byte offset is used as the push block's member index")
     # (a started meshlet's map entry is its slot, a u32 word: a bool stored there is invalid SPIR-V, which RADV rejects)
-    if "ctx.mesh_fallback_payload_member_index), index), slot);" not in task:
+    if "BufferWord(ctx, ctx.mesh_fallback_payload_member_index, index), slot);" not in task:
         raise SystemExit("a started meshlet does not write its slot, a u32 word, into the map")
     if "spv::MemoryAccessMask::Aligned, 4U" not in block(mesh, "Id LoadWord(") or \
             "spv::MemoryAccessMask::Aligned, 4U" not in block(mesh, "void StoreWord("):
@@ -154,6 +167,9 @@ def main():
         raise SystemExit("the fallback is not drawn from the records' header as an indirect draw")
     if "fallback_payload_address" not in draw or "MESH_FALLBACK_PAYLOAD_PUSH_OFFSET" not in draw:
         raise SystemExit("the fallback's buffer addresses are not pushed")
+    if "fallback_records_payload_descriptors" not in draw or "fallback_indirect_descriptor" not in draw or \
+            "p.fallback_storage_buffers && p.fallback_task && d.indirect" not in draw:
+        raise SystemExit("the no-BDA fallback does not bind or refresh its storage-buffer descriptors")
     # (a task's mesh workgroups are dispatched from the count its started threads take in the records' header, each writing
     # its slot to the map: DrawMeshTasksIndirect records no task count, and groups * threads was 0, so no mesh workgroup ran
     # and the floor grass was not drawn. A mesh workgroup reads its slot from the map in the entry block)

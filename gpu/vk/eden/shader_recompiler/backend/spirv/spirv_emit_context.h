@@ -255,6 +255,8 @@ public:
 
     std::array<UniformDefinitions, Info::MAX_CBUFS> cbufs{};
     std::array<StorageDefinitions, Info::MAX_SSBOS> ssbos{};
+    StorageDefinitions guest_pool_buffers{};
+    Id guest_pool_metadata{};
     std::vector<TextureBufferDefinition> texture_buffers;
     std::vector<ImageBufferDefinition> image_buffers;
     std::vector<TextureDefinition> textures;
@@ -425,6 +427,9 @@ public:
     // (longshot) a GPU without VK_EXT_mesh_shader: Task and Mesh are compute shaders. Their stage buffer outputs go to
     // the payload, map and record buffers, pushed as device addresses; a generated vertex stage reads the records.
     bool mesh_fallback{};
+    bool mesh_fallback_storage_buffers{};
+    Id mesh_fallback_buffers{};
+    Id mesh_fallback_indirect_input{};
     bool wants_mesh_fallback{};
     Id mesh_fallback_word_ptr{};   ///< PhysicalStorageBuffer pointer to a block of one u32
     u32 mesh_fallback_payload_member_index{};
@@ -432,6 +437,8 @@ public:
     u32 mesh_fallback_indirect_input_member_index{};
     /// A pointer to the u32 at a PhysicalStorageBuffer device address
     Id MeshFallbackWord(Id address);
+    /// A pointer to a word in one of the mesh fallback's storage-buffer descriptors
+    Id MeshFallbackWord(u32 member, Id word);
 
     Id load_const_func_u8{};
     Id load_const_func_u16{};

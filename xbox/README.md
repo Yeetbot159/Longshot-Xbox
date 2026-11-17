@@ -71,6 +71,7 @@ Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://lear
 | Quality preset | Minimum (`quality_preset=1`) | Low (`quality_preset=2`) |
 | Frame rate | 60 (`frame_rate_cap=0`) | 60 |
 | Texture budget | 768 MB (`RX_VK_VRAM_MB`) | 1.5 GB |
+| Imported-pool mirror cap | 256 MB (`RX_VK_MIRROR_MB`) | 512 MB |
 | Image pool at start | off (`RX_VK_IMAGE_PREALLOC=0`) | off |
 | Files compiled at once by the builder | 1 | 2 |
 
@@ -138,12 +139,16 @@ Series X|S devkits; this probe therefore describes the current UWP/Dozen API pat
 Dozen exposes Vulkan buffer device addresses only when the D3D12 shader model is at least 6.6
 ([upstream Dozen capability checks](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/dbbd251b6f00db68c1e9f0b7e8504b3b4278eaac/src/microsoft/vulkan/dzn_device.c));
 this console reports 6.4, so Dozen will not expose the address feature these guest shaders require. When BDA is missing,
-the renderer now enters a limited bound-buffer compatibility mode instead of stopping at startup. Arbitrary guest
-pointers remain untranslated and the mesh-to-compute fallback still requires BDA, so this mode does not establish
-complete rendering. The Series S probe package 0.2.2 successfully created a shader-model 6.4 pipeline with a bounded,
+the renderer now enters a limited bound-buffer compatibility mode instead of stopping at startup. Global memory loads
+can also search a fixed table of up to eight imported pools already used by the current recording; the table uses
+statically indexed storage-buffer descriptors and caps each pool range to 64 MiB (1 MiB for opt-in global stores).
+Pointers outside those ranges remain untranslated and overflow is logged. A descriptor-backed mesh-to-compute fallback
+is also implemented for adapters with host-memory import, shader int64, and sufficient descriptor limits, but it has
+not been validated on Xbox. These experimental paths do not establish complete rendering. The Series S probe package
+0.2.2 successfully created a shader-model 6.4 pipeline with a bounded,
 non-uniform SRV descriptor array, a promising prerequisite for a UWP-safe address-table path. It does not establish
-that Dozen's Vulkan storage-buffer descriptor indexing or guest-memory import works; the updated Device13 import test
-still needs to be run on the console.
+that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh fallback works; the updated Device13
+import test still needs to be run on the console.
 
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
 probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExistingHeapFromAddress` test returned
@@ -151,8 +156,7 @@ probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExisti
 `ID3D12Device13::OpenExistingHeapFromAddress1` with the full aligned 16 MB allocation, on ordinary and reserved-window
 memory, before checking GPU reads and writes. The attached Series S report came from probe package 0.2.2.0 and did not
 include that newer test; zero-copy import into Dozen remains unverified until the updated probe is run. The renderer now also
-logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing; this checks one
-prerequisite for a future address-table lowering path, which is not implemented yet. The renderer source compiles and
+logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing. The renderer source compiles and
 the package includes Mesa Dozen, but no Series S pipeline or frame has been verified.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,

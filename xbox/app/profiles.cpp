@@ -37,17 +37,19 @@ Mode mode_from_key(const std::string& key) {
 }
 
 // (quality_preset: 1 Minimum (4GB), 2 Low (6GB), gpu/vk/vk_menu.cpp tx_preset; frame_rate_cap 0 is 60, the safe one;
-// RX_VK_VRAM_MB the texture budget; RX_VK_IMAGE_PREALLOC=0 drops the start-up's image pool, which on a PC took GPU memory
-// the console does not have, xbox/README.md "Memory on a PC")
+// RX_VK_VRAM_MB the texture budget; RX_VK_MIRROR_MB caps imported-pool mirrors against the app's shared-memory limit;
+// RX_VK_IMAGE_PREALLOC=0 drops the start-up's image pool, which on a PC took GPU memory the console does not have,
+// xbox/README.md "Memory on a PC")
 const Profile& series_s() {
     static const Profile p{
         "series_s",
         "Series S",
-        "1080p, Minimum preset, 60 fps, 768 MB of textures; builds one file at a time",
+        "1080p, Minimum preset, 60 fps, 768 MB of textures, 256 MB mirror cap; builds one file at a time",
         5120,
         1,
         {{"quality_preset", "1"}, {"output_res", "1920x1080"}, {"frame_rate_cap", "0"}, {"handheld_profile", "0"}},
-        {{"RX_VK_VRAM_MB", "768"}, {"RX_VK_IMAGE_PREALLOC", "0"}, {"RX_VK_WORKERS", "1"}, {"RX_VK_LOAD_WORKERS", "1"}},
+        {{"RX_VK_VRAM_MB", "768"}, {"RX_VK_MIRROR_MB", "256"}, {"RX_VK_IMAGE_PREALLOC", "0"},
+         {"RX_VK_WORKERS", "1"}, {"RX_VK_LOAD_WORKERS", "1"}},
     };
     return p;
 }
@@ -56,11 +58,12 @@ const Profile& series_x() {
     static const Profile p{
         "series_x",
         "Series X",
-        "1440p (the game's own), Low preset, 60 fps, 1.5 GB of textures; builds two files at a time",
+        "1440p (the game's own), Low preset, 60 fps, 1.5 GB of textures, 512 MB mirror cap; builds two files at a time",
         8192,
         2,
         {{"quality_preset", "2"}, {"output_res", "2560x1440"}, {"frame_rate_cap", "0"}, {"handheld_profile", "0"}},
-        {{"RX_VK_VRAM_MB", "1536"}, {"RX_VK_IMAGE_PREALLOC", "0"}, {"RX_VK_WORKERS", "2"}, {"RX_VK_LOAD_WORKERS", "2"}},
+        {{"RX_VK_VRAM_MB", "1536"}, {"RX_VK_MIRROR_MB", "512"}, {"RX_VK_IMAGE_PREALLOC", "0"},
+         {"RX_VK_WORKERS", "2"}, {"RX_VK_LOAD_WORKERS", "2"}},
     };
     return p;
 }

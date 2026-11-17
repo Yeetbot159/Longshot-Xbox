@@ -3,13 +3,17 @@ driver, but rendering has not yet been verified on a Series S or Series X. The g
 built from the player's own files and are not included.
 
 The current Series S UWP D3D12 device reports shader model 6.4. Mesa Dozen only exposes Vulkan buffer device addresses at
-shader model 6.6. Without BDA, Longshot now starts in a limited bound-buffer compatibility mode, but arbitrary
-guest-pointer translation and the mesh-to-compute fallback remain unavailable; rendering has not been verified on the
-console. The attached Series S probe came from package 0.2.2.0 and confirmed bounded non-uniform SRV array pipeline
-creation, but reported mesh shader tier 0 and an `E_INVALIDARG` from the older Device3 host-heap test. The current
-probe source separately checks the newer Device13 import API with a full aligned allocation, but that update has not
-yet been run on the console. Microsoft's public GDK sample demonstrates mesh-shader pipelines on Series X|S devkits;
-the UWP tier-0 result describes this UWP/Dozen path, not the console hardware's full GDK capability.
+shader model 6.6. Without BDA, Longshot starts in a limited bound-buffer compatibility mode; a bounded guest-address
+table is implemented for global-memory accesses that fall within up to eight imported pools, but arbitrary pointers
+remain unsupported. The mesh-to-compute fallback now has an experimental descriptor-backed no-BDA path, gated on
+host-memory import, shader int64, and descriptor capacity; neither it nor guest-pool access has been validated on
+console. Rendering has not been verified. The available
+Series S probe report came from package 0.2.5.0 and is incomplete before the D3D12 results; earlier probe results
+confirmed bounded non-uniform SRV array pipeline creation, mesh shader tier 0, and `E_INVALIDARG` from the older
+Device3 host-heap test. The current probe source checks the newer Device13 import API with a full aligned allocation,
+but that update has not yet been run on the console. Microsoft's public GDK sample demonstrates mesh-shader pipelines
+on Series X|S devkits; the UWP tier-0 result describes this UWP/Dozen path, not the console hardware's full GDK
+capability.
 
 What it does now, on an Xbox Series X|S in Developer Mode:
 

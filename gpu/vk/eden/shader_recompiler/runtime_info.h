@@ -109,6 +109,8 @@ struct RuntimeInfo {
     /// (longshot) a GPU without VK_EXT_mesh_shader: task and mesh programs are compute shaders that write their stage
     /// buffer outputs to storage buffers, and a generated vertex stage reads those records back.
     bool mesh_fallback{};
+    /// (longshot) the mesh fallback uses storage-buffer descriptors rather than physical addresses.
+    bool mesh_fallback_storage_buffers{};
     /// (longshot) the generated vertex stage of that fallback: it reads a record per position and writes the stage's outputs
     bool mesh_fallback_vertex{};
     /// (longshot) a mesh program with a task program before it: the task's count in its payload bounds the mesh workgroups

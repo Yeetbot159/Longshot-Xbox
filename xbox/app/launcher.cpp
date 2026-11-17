@@ -13,6 +13,7 @@
 #include <dwrite_3.h>
 #include <dxgi1_6.h>
 #include <gamingdeviceinformation.h>
+#include <wincodec.h>
 
 #include <winrt/Windows.ApplicationModel.Core.h>
 #include <winrt/Windows.ApplicationModel.h>
@@ -641,6 +642,7 @@ private:
                                    D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW};
         ctx_->CreateBitmapFromDxgiSurface(surf.get(), &bp, target_.put());
         ctx_->SetTarget(target_.get());
+        load_logo();
         DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(dw_.put_void()));
         dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
                               48.0f, L"en-us", title_.put());
@@ -657,6 +659,29 @@ private:
         ctx_->CreateSolidColorBrush({0.24f, 0.39f, 0.29f, 1}, edge_.put());
         width_ = float(sd.Width);
         height_ = float(sd.Height);
+    }
+
+    void load_logo() {
+        wchar_t exe[MAX_PATH]{};
+        const DWORD length = GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        if (!length || length >= MAX_PATH) return;
+        const fs::path path = fs::path(exe).parent_path() / L"Assets" / L"Square150x150Logo.png";
+        com_ptr<IWICImagingFactory> factory;
+        if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, __uuidof(IWICImagingFactory),
+                                    factory.put_void())))
+            return;
+        com_ptr<IWICBitmapDecoder> decoder;
+        if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
+                                                      decoder.put())))
+            return;
+        com_ptr<IWICBitmapFrameDecode> frame;
+        if (FAILED(decoder->GetFrame(0, frame.put()))) return;
+        com_ptr<IWICFormatConverter> converter;
+        if (FAILED(factory->CreateFormatConverter(converter.put())) ||
+            FAILED(converter->Initialize(frame.get(), GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, nullptr,
+                                         0.0, WICBitmapPaletteTypeCustom)))
+            return;
+        ctx_->CreateBitmapFromWicBitmap(converter.get(), nullptr, logo_.put());
     }
 
     void text(const std::string& s, IDWriteTextFormat* f, ID2D1Brush* b, float x, float y, float w, float h) {
@@ -682,11 +707,17 @@ private:
         }
         ctx_->BeginDraw();
         ctx_->Clear({0.035f, 0.055f, 0.043f, 1});
-        ctx_->FillRoundedRectangle(D2D1_ROUNDED_RECT{D2D1_RECT_F{margin - 10 * scale, 48 * scale, margin + 5 * scale,
-                                                                  124 * scale}, 8 * scale, 8 * scale},
-                                   accent_.get());
-        text("LONGSHOT", title_.get(), fg_.get(), margin + 20 * scale, 42 * scale, 760 * scale, 62 * scale);
-        text("XBOX EDITION  /  YOUR GAME FILES STAY ON YOUR STORAGE", small_.get(), dim_.get(), margin + 22 * scale,
+        if (logo_) {
+            ctx_->DrawBitmap(logo_.get(),
+                             D2D1_RECT_F{margin - 4 * scale, 34 * scale, margin + 76 * scale, 114 * scale}, 1.0f,
+                             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        } else {
+            ctx_->FillRoundedRectangle(D2D1_ROUNDED_RECT{D2D1_RECT_F{margin - 10 * scale, 48 * scale, margin + 5 * scale,
+                                                                      124 * scale}, 8 * scale, 8 * scale},
+                                       accent_.get());
+        }
+        text("LONGSHOT", title_.get(), fg_.get(), margin + 88 * scale, 42 * scale, 760 * scale, 62 * scale);
+        text("XBOX EDITION  /  YOUR GAME FILES STAY ON YOUR STORAGE", small_.get(), dim_.get(), margin + 90 * scale,
              112 * scale, 1000 * scale, 30 * scale);
         text("GAME SETUP", small_.get(), accent_.get(), left_x, 154 * scale, left_w, 24 * scale);
         float y = content_y;
@@ -764,6 +795,7 @@ private:
     com_ptr<ID2D1Factory1> d2f_;
     com_ptr<ID2D1DeviceContext> ctx_;
     com_ptr<ID2D1Bitmap1> target_;
+    com_ptr<ID2D1Bitmap> logo_;
     com_ptr<IDWriteFactory> dw_;
     com_ptr<IDWriteTextFormat> title_, text_, small_;
     com_ptr<ID2D1SolidColorBrush> fg_, dim_, accent_, panel_, tile_, selected_, edge_;
