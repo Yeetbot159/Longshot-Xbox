@@ -325,6 +325,65 @@ void DefineSsbos(EmitContext& ctx, StorageTypeDefinition& type_def,
     u32 index{};
     size_t table{};
     for (const StorageBufferDescriptor& desc : info.storage_buffers_descriptors) {
+        if (GuestAddressTable::IsMetadata(desc)) {
+            const Id id{ctx.AddGlobalVariable(struct_pointer, spv::StorageClass::StorageBuffer)};
+            ctx.Decorate(id, spv::Decoration::Binding, binding);
+            ctx.Decorate(id, spv::Decoration::DescriptorSet, 0U);
+            ctx.Name(id, "guest_pool_metadata");
+            if (ctx.profile.supported_spirv >= 0x00010400) {
+                ctx.interfaces.push_back(id);
+            }
+            type_def.element = ctx.TypePointer(spv::StorageClass::StorageBuffer, type);
+            if (member_type == &StorageDefinitions::U64) {
+                ctx.guest_pool_metadata = id;
+            }
+            binding++;
+            continue;
+        }
+        if (GuestAddressTable::IsPoolArray(desc)) {
+            const Id array{ctx.TypeArray(struct_type, ctx.Const(desc.count))};
+            const Id id{ctx.AddGlobalVariable(ctx.TypePointer(spv::StorageClass::StorageBuffer, array),
+                                              spv::StorageClass::StorageBuffer)};
+            ctx.Decorate(id, spv::Decoration::Binding, binding);
+            ctx.Decorate(id, spv::Decoration::DescriptorSet, 0U);
+            ctx.Name(id, "guest_pool_buffers");
+            if (ctx.profile.supported_spirv >= 0x00010400) {
+                ctx.interfaces.push_back(id);
+            }
+            ctx.guest_pool_buffers.*member_type = id;
+            binding++;
+            continue;
+        }
+        if (MeshFallbackBuffers::IsBuffersArray(desc)) {
+            const Id array{ctx.TypeArray(struct_type, ctx.Const(desc.count))};
+            const Id id{ctx.AddGlobalVariable(ctx.TypePointer(spv::StorageClass::StorageBuffer, array),
+                                              spv::StorageClass::StorageBuffer)};
+            ctx.Decorate(id, spv::Decoration::Binding, binding);
+            ctx.Decorate(id, spv::Decoration::DescriptorSet, 0U);
+            ctx.Name(id, "mesh_fallback_buffers");
+            if (ctx.profile.supported_spirv >= 0x00010400) {
+                ctx.interfaces.push_back(id);
+            }
+            if (member_type == &StorageDefinitions::U32) {
+                ctx.mesh_fallback_buffers = id;
+            }
+            binding++;
+            continue;
+        }
+        if (MeshFallbackBuffers::IsIndirectInput(desc)) {
+            const Id id{ctx.AddGlobalVariable(struct_pointer, spv::StorageClass::StorageBuffer)};
+            ctx.Decorate(id, spv::Decoration::Binding, binding);
+            ctx.Decorate(id, spv::Decoration::DescriptorSet, 0U);
+            ctx.Name(id, "mesh_fallback_indirect_input");
+            if (ctx.profile.supported_spirv >= 0x00010400) {
+                ctx.interfaces.push_back(id);
+            }
+            if (member_type == &StorageDefinitions::U32) {
+                ctx.mesh_fallback_indirect_input = id;
+            }
+            binding++;
+            continue;
+        }
         if (desc.count > 1) {   // (longshot: a storage buffer table, Info::global_tables)
             const Id array{ctx.TypeArray(struct_type, ctx.Const(desc.count))};
             const Id id{ctx.AddGlobalVariable(ctx.TypePointer(spv::StorageClass::StorageBuffer, array),
@@ -526,6 +585,7 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
     AddCapability(spv::Capability::Shader);
     if (runtime_info.mesh_fallback || runtime_info.mesh_fallback_vertex) {
         wants_mesh_fallback = true;   // (before any DefineRescalingInputPushConstant, which is made once)
+        mesh_fallback_storage_buffers = runtime_info.mesh_fallback_storage_buffers;
     }
     DefineCommonTypes(program.info);
     DefineCommonConstants();
@@ -555,20 +615,24 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
         wants_mesh_first = stage == Stage::Task;
         // (the push block is made below, before DefineGlobalMemoryFunctions can ask for the page table: a fallback stage
         // that follows pointers needs its member now, or the block would be made without it)
-        wants_guest_pages = program.info.uses_global_memory && profile.support_int64;
+        wants_guest_pages = !mesh_fallback_storage_buffers && program.info.uses_global_memory && profile.support_int64;
         if (!Sirit::ValidId(U64)) {
             AddCapability(spv::Capability::Int64);
             U64 = Name(TypeInt(64, false), "u64");
         }
-        AddCapability(spv::Capability::PhysicalStorageBufferAddresses);
-        AddExtension("SPV_KHR_physical_storage_buffer");
-        SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
+        if (!mesh_fallback_storage_buffers) {
+            AddCapability(spv::Capability::PhysicalStorageBufferAddresses);
+            AddExtension("SPV_KHR_physical_storage_buffer");
+            SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
+        }
         DefineRescalingInputPushConstant();
     }
     if (runtime_info.mesh_fallback_vertex) {   // (the generated vertex stage: pushes the records' address)
-        AddCapability(spv::Capability::PhysicalStorageBufferAddresses);
-        AddExtension("SPV_KHR_physical_storage_buffer");
-        SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
+        if (!mesh_fallback_storage_buffers) {
+            AddCapability(spv::Capability::PhysicalStorageBufferAddresses);
+            AddExtension("SPV_KHR_physical_storage_buffer");
+            SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
+        }
         if (!Sirit::ValidId(U64)) {
             AddCapability(spv::Capability::Int64);
             U64 = Name(TypeInt(64, false), "u64");
@@ -1123,15 +1187,45 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         }
         return OpAccessChain(it->second.second, OpConvertUToPtr(it->second.first, address), Const(0U));
     };
-    // (the page table's lookup of addr: hit(target) is called in the block where the page is mapped, its device address in target,
-    // and must end that block (a return). Falls through after it)
+    using DefPtr = Id StorageDefinitions::*;
+    const bool guest_pool_fallback{Sirit::ValidId(guest_pool_metadata)};
+    // (the lookup's hit target is a storage-buffer pointer for the fixed pool fallback, or a physical address for the page table;
+    // it must end that block (a return). Falls through after it)
     // (RX_VK_FOLLOW_STORES=1: writes and atomics through the table too; off by default, see the storage buffer pass)
     static const bool follow_stores{env_on("RX_VK_FOLLOW_STORES")};
     // (longshot) size: the access's bytes. An access that runs past its 4 KB page is left to the miss path: the table maps pages one
     // by one, the next page may be another allocation's or none, and a 16-byte read at a page's end faulted the device (the culling
     // passes 53caac5f, b6122162 at a save's load)
-    const auto guest_lookup = [&](Id addr, u32 size, auto&& hit) {
-        if (!follow_pointers || gp_level < 2) return;
+    const auto guest_lookup = [&](Id addr, u32 size, DefPtr ssbo_member, Id element_pointer, u32 shift, auto&& hit) {
+        if (guest_pool_fallback) {
+            // Xbox's no-BDA path uses a bounded fixed array; every descriptor index is a compile-time constant.
+            const Id pool_table{guest_pool_buffers.*ssbo_member};
+            if (!Sirit::ValidId(guest_pool_metadata) || !Sirit::ValidId(pool_table)) return;
+            for (u32 pool = 0; pool < GuestAddressTable::kPoolCount; pool++) {
+                const Id base_pointer{
+                    OpAccessChain(storage_types.U64.element, guest_pool_metadata, Const(0U), Const(pool * 2))};
+                const Id size_pointer{
+                    OpAccessChain(storage_types.U64.element, guest_pool_metadata, Const(0U), Const(pool * 2 + 1))};
+                const Id base{OpLoad(U64, base_pointer)};
+                const Id pool_size{OpLoad(U64, size_pointer)};
+                const Id offset{OpISub(U64, addr, base)};
+                const Id remaining{OpISub(U64, pool_size, Constant(U64, u64{size}))};
+                const Id inside{OpLogicalAnd(
+                    U1, OpLogicalAnd(U1, OpUGreaterThanEqual(U1, pool_size, Constant(U64, u64{size})),
+                                     OpUGreaterThanEqual(U1, addr, base)),
+                    OpULessThanEqual(U1, offset, remaining))};
+                const Id then_label{OpLabel()};
+                const Id next_label{OpLabel()};
+                OpSelectionMerge(next_label, spv::SelectionControlMask::MaskNone);
+                OpBranchConditional(inside, then_label, next_label);
+                AddLabel(then_label);
+                const Id index{OpUConvert(U32[1], OpShiftRightLogical(U64, offset, Const(shift)))};
+                hit(OpAccessChain(element_pointer, pool_table, Const(pool), Const(0U), index));
+                AddLabel(next_label);
+            }
+            return;
+        }
+        if (gp_level < 2) return;
         const Id table{wants_guest_pages && rescaling_push_constants.value != 0
                            ? OpLoad(U64, OpAccessChain(TypePointer(spv::StorageClass::PushConstant, U64), rescaling_push_constants,
                                                        Const(guest_pages_member_index)))
@@ -1162,7 +1256,6 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         OpBranch(else_label);
         AddLabel(else_label);
     };
-    using DefPtr = Id StorageDefinitions::*;
     const Id zero{u32_zero_value};
     // (EvilOOT) the structure pointer type of a storage buffer of that member's elements, for OpArrayLength
     const auto struct_pointer_of{[&](DefPtr m) -> Id {
@@ -1229,7 +1322,8 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
             Id best_distance{Constant(U64, ~u64{0})};
             for (size_t index = 0; index < num_buffers; ++index) {
                 const auto& ssbo{info.storage_buffers_descriptors[index]};
-                if (index == miss_index || ssbo.count != 1 || ssbo.cbuf_index == 0 || ssbo.cbuf_offset % 8 != 0 ||
+                if (index == miss_index || GuestAddressTable::IsMetadata(ssbo) || GuestAddressTable::IsPoolArray(ssbo) ||
+                    ssbo.count != 1 || ssbo.cbuf_index == 0 || ssbo.cbuf_offset % 8 != 0 ||
                     !Sirit::ValidId(ssbos[index].*ssbo_member) || !Sirit::ValidId(cbufs[ssbo.cbuf_index].U32x2)) {
                     continue;
                 }
@@ -1274,6 +1368,9 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
                 continue;
             }
             const auto& ssbo{info.storage_buffers_descriptors[index]};
+            if (GuestAddressTable::IsMetadata(ssbo)) {
+                continue;
+            }
             const Id ssbo_addr_cbuf_offset{Const(ssbo.cbuf_offset / 8)};
             const Id ssbo_size_cbuf_offset{Const(ssbo.cbuf_offset / 4 + 2)};
             const Id ssbo_addr_pointer{OpAccessChain(
@@ -1421,8 +1518,9 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         const Id addr{OpFunctionParameter(U64)};
         define_body(ssbo_member, addr, element_pointer, shift,
                     [&](Id ssbo_pointer) { OpReturnValue(OpLoad(type, ssbo_pointer)); });
-        guest_lookup(addr, 1U << shift, [&](Id target) {
-            if (gp_level >= 3) OpReturnValue(psb_load(type, target, 4U));
+        guest_lookup(addr, 1U << shift, ssbo_member, element_pointer, shift, [&](Id target) {
+            if (guest_pool_fallback) OpReturnValue(OpLoad(type, target));
+            else if (gp_level >= 3) OpReturnValue(psb_load(type, target, 4U));
             else OpReturnValue(ConstantNull(type));
         });
         OpReturnValue(ConstantNull(type));
@@ -1438,8 +1536,10 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
             OpStore(ssbo_pointer, data);
             OpReturn();
         });
-        if (follow_stores) guest_lookup(addr, 1U << shift, [&](Id target) {   // (longshot: through the page table, as the loads: the culling's outputs)
-            if (gp_level >= 3) OpStore(psb_member(type, target), data, spv::MemoryAccessMask::Aligned, 4U);
+        if (follow_stores) guest_lookup(addr, 1U << shift, ssbo_member, element_pointer, shift,
+                                        [&](Id target) {   // (longshot: through the page table, as the loads: the culling's outputs)
+            if (guest_pool_fallback) OpStore(target, data);
+            else if (gp_level >= 3) OpStore(psb_member(type, target), data, spv::MemoryAccessMask::Aligned, 4U);
             OpReturn();
         });
         OpReturn();
@@ -1476,9 +1576,14 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
                 const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
                 OpReturnValue((this->*atomics[i])(U32[1], ssbo_pointer, scope, u32_zero_value, value));
             });
-            if (follow_stores) guest_lookup(addr, 4U, [&](Id target) {   // (longshot: the culling's counters, through the page table)
+            if (follow_stores)
+                guest_lookup(addr, 4U, &StorageDefinitions::U32, storage_types.U32.element, 2,
+                             [&](Id target) {   // (longshot: the culling's counters, through the page table)
                 const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
-                if (gp_level >= 3) OpReturnValue((this->*atomics[i])(U32[1], psb_member(U32[1], target), scope, u32_zero_value, value));
+                if (guest_pool_fallback)
+                    OpReturnValue((this->*atomics[i])(U32[1], target, scope, u32_zero_value, value));
+                else if (gp_level >= 3)
+                    OpReturnValue((this->*atomics[i])(U32[1], psb_member(U32[1], target), scope, u32_zero_value, value));
                 else OpReturnValue(u32_zero_value);
             });
             OpReturnValue(u32_zero_value);
@@ -1497,8 +1602,10 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         }};
         define_body(&StorageDefinitions::U32, addr, storage_types.U32.element, 2,
                     [&](Id ssbo_pointer) { OpReturnValue(cas(ssbo_pointer)); });
-        if (follow_stores) guest_lookup(addr, 4U, [&](Id target) {
-            if (gp_level >= 3) OpReturnValue(cas(psb_member(U32[1], target)));
+        if (follow_stores)
+            guest_lookup(addr, 4U, &StorageDefinitions::U32, storage_types.U32.element, 2, [&](Id target) {
+            if (guest_pool_fallback) OpReturnValue(cas(target));
+            else if (gp_level >= 3) OpReturnValue(cas(psb_member(U32[1], target)));
             else OpReturnValue(u32_zero_value);
         });
         OpReturnValue(u32_zero_value);
@@ -1549,8 +1656,10 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
         }};
         define_body(&StorageDefinitions::U32, addr, storage_types.U32.element, 2,
                     [&](Id ssbo_pointer) { cas_loop(ssbo_pointer); }, false);
-        guest_lookup(addr, 4U, [&](Id target) {
-            if (gp_level >= 3) {
+        guest_lookup(addr, 4U, &StorageDefinitions::U32, storage_types.U32.element, 2, [&](Id target) {
+            if (guest_pool_fallback) {
+                cas_loop(target);
+            } else if (gp_level >= 3) {
                 cas_loop(psb_member(U32[1], target));
             } else {
                 OpReturn();
@@ -1608,8 +1717,13 @@ void EmitContext::DefineGlobalMemoryFunctions(const Info& info) {
             define_body(&StorageDefinitions::U32, addr, storage_types.U32.element, 2,
                         [&](Id ssbo_pointer) { cas_loop(ssbo_pointer); }, false);
         }
-        if (follow_stores) guest_lookup(addr, 4U, [&](Id target) {
-            if (gp_level < 3) OpReturnValue(ConstantNull(F32[1]));
+        if (follow_stores)
+            guest_lookup(addr, 4U, native_f32_add ? &StorageDefinitions::F32 : &StorageDefinitions::U32,
+                         native_f32_add ? storage_types.F32.element : storage_types.U32.element, 2, [&](Id target) {
+            if (guest_pool_fallback) {
+                if (native_f32_add) native_add(target);
+                else cas_loop(target);
+            } else if (gp_level < 3) OpReturnValue(ConstantNull(F32[1]));
             else if (native_f32_add) native_add(psb_member(F32[1], target));
             else cas_loop(psb_member(U32[1], target));
         });
@@ -1725,6 +1839,14 @@ Id EmitContext::MeshFallbackWord(Id address) {
     }
     const Id pointer_type{TypePointer(spv::StorageClass::PhysicalStorageBuffer, U32[1])};
     return OpAccessChain(pointer_type, OpConvertUToPtr(mesh_fallback_word_ptr, address), Const(0U));
+}
+
+Id EmitContext::MeshFallbackWord(u32 member, Id word) {
+    if (member == mesh_fallback_indirect_input_member_index) {
+        return OpAccessChain(storage_types.U32.element, mesh_fallback_indirect_input, Const(0U), word);
+    }
+    const u32 buffer_index = member == mesh_fallback_payload_member_index ? 1U : 0U;
+    return OpAccessChain(storage_types.U32.element, mesh_fallback_buffers, Const(buffer_index), Const(0U), word);
 }
 
 void EmitContext::DefineRescalingInputUniformConstant() {

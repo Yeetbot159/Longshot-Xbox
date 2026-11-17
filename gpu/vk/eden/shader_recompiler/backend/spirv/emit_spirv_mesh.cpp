@@ -55,9 +55,9 @@ Id PayloadWord(EmitContext& ctx, Id index) {
         const Id first{ctx.OpIAdd(
             ctx.U32[1], ctx.Const(MESH_FALLBACK_CAPACITY),
             ctx.OpIMul(ctx.U32[1], task, ctx.Const(ctx.mesh_info.payload_words)))};
-        return BufferWordAt(ctx, PushU64(ctx, ctx.mesh_fallback_payload_member_index),
-                            ctx.OpIAdd(ctx.U32[1], first,
-                                       Clamped(ctx, index, ctx.mesh_info.payload_words)));
+        return BufferWord(ctx, ctx.mesh_fallback_payload_member_index,
+                          ctx.OpIAdd(ctx.U32[1], first,
+                                     Clamped(ctx, index, ctx.mesh_info.payload_words)));
     }
     return ctx.OpAccessChain(ctx.mesh_payload_u32, ctx.mesh_payload,
                              Clamped(ctx, index, ctx.mesh_info.payload_words));
@@ -156,6 +156,9 @@ Id BufferWordAt(EmitContext& ctx, Id base, Id word) {
 
 /// The word at a pushed device address.
 Id BufferWord(EmitContext& ctx, u32 member, Id word) {
+    if (ctx.mesh_fallback_storage_buffers) {
+        return ctx.MeshFallbackWord(member, word);
+    }
     return BufferWordAt(ctx, PushU64(ctx, member), word);
 }
 
@@ -337,7 +340,7 @@ void TaskEpilogue(EmitContext& ctx) {
                 BufferWord(ctx, ctx.mesh_fallback_records_member_index, ctx.Const(MESH_FALLBACK_DISPATCH_WORD)),
                 ctx.Const(static_cast<u32>(spv::Scope::Device)), ctx.u32_zero_value, ctx.Const(1U))};
             // (fewer than MESH_FALLBACK_CAPACITY: a started slot is below it)
-            StoreWord(ctx, BufferWordAt(ctx, PushU64(ctx, ctx.mesh_fallback_payload_member_index), index), slot);
+            StoreWord(ctx, BufferWord(ctx, ctx.mesh_fallback_payload_member_index, index), slot);
         });
         // (the payload once a task workgroup, its threads sharing the words, where its mesh workgroups read it (PayloadWord).
         // A copy a slot was 32 times the writes and the memory: 52 MB a draw at 16384 slots)
@@ -348,8 +351,8 @@ void TaskEpilogue(EmitContext& ctx) {
                 ctx.U32[1], ctx.Const(MESH_FALLBACK_CAPACITY),
                 ctx.OpIMul(ctx.U32[1], task, ctx.Const(ctx.mesh_info.payload_words)))};
             Strided(ctx, ctx.mesh_info.payload_words, ctx.mesh_threads, LocalInvocation(ctx), [&](Id index) {
-                StoreWord(ctx, BufferWordAt(ctx, PushU64(ctx, ctx.mesh_fallback_payload_member_index),
-                                         ctx.OpIAdd(ctx.U32[1], first, index)),
+                StoreWord(ctx, BufferWord(ctx, ctx.mesh_fallback_payload_member_index,
+                                          ctx.OpIAdd(ctx.U32[1], first, index)),
                             LoadWord(ctx, PayloadWord(ctx, index)));
             });
         });
@@ -533,6 +536,13 @@ Id EmitIsbeRead(EmitContext& ctx, Id address) {
         if (ctx.mesh_fallback) {
             const Id input{PushU64(ctx, ctx.mesh_fallback_indirect_input_member_index)};
             const Id indirect{ctx.OpINotEqual(ctx.U1, input, ctx.Constant(ctx.U64, u64{0}))};
+            if (ctx.mesh_fallback_storage_buffers) {
+                const Id gpu_first{LoadWord(
+                    ctx, BufferWord(ctx, ctx.mesh_fallback_indirect_input_member_index, ctx.Const(3U)))};
+                const Id first{ctx.OpSelect(ctx.U32[1], indirect, gpu_first,
+                                            PushU32(ctx, ctx.mesh_first_member_index))};
+                return ctx.OpIAdd(ctx.U32[1], workgroup, first);
+            }
             // On a direct draw the header's instance count is a valid, read-only word for the unused load.
             const Id base{ctx.OpSelect(ctx.U64, indirect, input, PushU64(ctx, ctx.mesh_fallback_records_member_index))};
             const Id gpu_first{LoadWord(ctx, BufferWordAt(ctx, base, ctx.Const(1U)))};
@@ -616,7 +626,7 @@ void EmitMeshPrologue(EmitContext& ctx) {
         // (longshot) the slot its task gave this workgroup, from the map at its index of the dispatch (TaskEpilogue). Read here,
         // in the entry block, it serves every use; a load, no branch (see below)
         ctx.mesh_fallback_slot =
-            LoadWord(ctx, BufferWordAt(ctx, PushU64(ctx, ctx.mesh_fallback_payload_member_index), WorkgroupId(ctx)));
+            LoadWord(ctx, BufferWord(ctx, ctx.mesh_fallback_payload_member_index, WorkgroupId(ctx)));
     }
     // (local) The stage buffer's map and attribute regions start at zero, as they come out on NVIDIA: workgroup memory holds
     // whatever the last workgroup on that unit left, and a vertex or an index byte the program left unwritten was that. On an

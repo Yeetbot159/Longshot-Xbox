@@ -179,6 +179,34 @@ struct StorageBufferDescriptor {
     auto operator<=>(const StorageBufferDescriptor&) const = default;
 };
 
+namespace GuestAddressTable {
+inline constexpr u32 kMetadataCbufIndex = ~u32{0};
+inline constexpr u32 kPoolArrayCbufIndex = ~u32{1};
+// A fixed, statically indexed table avoids requiring descriptor indexing on the no-BDA path.
+inline constexpr u32 kPoolCount = 8;
+
+inline bool IsMetadata(const StorageBufferDescriptor& desc) {
+    return desc.cbuf_index == kMetadataCbufIndex;
+}
+
+inline bool IsPoolArray(const StorageBufferDescriptor& desc) {
+    return desc.cbuf_index == kPoolArrayCbufIndex;
+}
+} // namespace GuestAddressTable
+
+namespace MeshFallbackBuffers {
+inline constexpr u32 kBuffersArrayCbufIndex = ~u32{2};
+inline constexpr u32 kIndirectInputCbufIndex = ~u32{3};
+
+inline bool IsBuffersArray(const StorageBufferDescriptor& desc) {
+    return desc.cbuf_index == kBuffersArrayCbufIndex;
+}
+
+inline bool IsIndirectInput(const StorageBufferDescriptor& desc) {
+    return desc.cbuf_index == kIndirectInputCbufIndex;
+}
+} // namespace MeshFallbackBuffers
+
 struct TextureBufferDescriptor {
     bool has_secondary;
     u32 cbuf_index;

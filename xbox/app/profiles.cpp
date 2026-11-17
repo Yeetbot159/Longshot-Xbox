@@ -37,17 +37,21 @@ Mode mode_from_key(const std::string& key) {
 }
 
 // (quality_preset: 1 Minimum (4GB), 2 Low (6GB), gpu/vk/vk_menu.cpp tx_preset; frame_rate_cap 0 is 60, the safe one;
-// RX_VK_VRAM_MB the texture budget; RX_VK_IMAGE_PREALLOC=0 drops the start-up's image pool, which on a PC took GPU memory
-// the console does not have, xbox/README.md "Memory on a PC")
+// RX_VK_MEMORY_MB limits VMA allocations across all heaps, leaving room for the game and host; RX_VK_VRAM_MB is the texture
+// budget; RX_VK_MIRROR_MB caps imported-pool mirrors separately against the app's shared-memory limit;
+// RX_VK_IMAGE_PREALLOC=0 drops the start-up's image pool, which on a PC took GPU memory the console does not have,
+// xbox/README.md "Memory on a PC")
 const Profile& series_s() {
     static const Profile p{
         "series_s",
         "Series S",
-        "1080p, Minimum preset, 60 fps, 768 MB of textures; builds one file at a time",
+        "1080p, Minimum preset, 60 fps, up to 2 GB renderer cap, 768 MB textures, 256 MB mirrors; one build job",
         5120,
+        2048,
         1,
         {{"quality_preset", "1"}, {"output_res", "1920x1080"}, {"frame_rate_cap", "0"}, {"handheld_profile", "0"}},
-        {{"RX_VK_VRAM_MB", "768"}, {"RX_VK_IMAGE_PREALLOC", "0"}},
+        {{"RX_VK_VRAM_MB", "768"}, {"RX_VK_MIRROR_MB", "256"}, {"RX_VK_IMAGE_PREALLOC", "0"},
+         {"RX_VK_WORKERS", "1"}, {"RX_VK_LOAD_WORKERS", "1"}},
     };
     return p;
 }
@@ -56,11 +60,13 @@ const Profile& series_x() {
     static const Profile p{
         "series_x",
         "Series X",
-        "1440p (the game's own), Low preset, 60 fps, 1.5 GB of textures; builds two files at a time",
+        "1440p (the game's own), Low preset, 60 fps, up to 4 GB renderer cap, 1.5 GB textures, 512 MB mirrors; two build jobs",
         8192,
+        4096,
         2,
         {{"quality_preset", "2"}, {"output_res", "2560x1440"}, {"frame_rate_cap", "0"}, {"handheld_profile", "0"}},
-        {{"RX_VK_VRAM_MB", "1536"}, {"RX_VK_IMAGE_PREALLOC", "0"}},
+        {{"RX_VK_VRAM_MB", "1536"}, {"RX_VK_MIRROR_MB", "512"}, {"RX_VK_IMAGE_PREALLOC", "0"},
+         {"RX_VK_WORKERS", "2"}, {"RX_VK_LOAD_WORKERS", "2"}},
     };
     return p;
 }
@@ -69,6 +75,14 @@ const Profile& profile_for(Mode mode, Model console) {
     if (mode == Mode::series_s) return series_s();
     if (mode == Mode::series_x) return series_x();
     return console == Model::series_x || console == Model::series_x_devkit ? series_x() : series_s();
+}
+
+uint32_t renderer_memory_cap_mb(const Profile& profile, uint64_t expected_limit_bytes) {
+    constexpr uint64_t kMB = 1ull << 20;
+    const uint32_t fallback = std::min(profile.renderer_memory_mb, 2048u);
+    if (!expected_limit_bytes) return fallback;
+    const uint64_t half_expected_mb = std::max<uint64_t>(1, expected_limit_bytes / kMB / 2);
+    return static_cast<uint32_t>(std::min<uint64_t>(profile.renderer_memory_mb, half_expected_mb));
 }
 
 std::string apply_options(const std::string& ini, const Profile& p) {

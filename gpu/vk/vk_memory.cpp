@@ -4116,6 +4116,45 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     return remember({p->mirror, off, size, 0});
 }
 
+size_t memory_guest_pool_bindings(GuestPoolBinding* out, size_t capacity, bool written, bool* overflow) {
+    if (overflow) *overflow = false;
+    if (!out || !capacity) return 0;
+
+    constexpr uint64_t kReadRange = 64ull << 20;
+    constexpr uint64_t kWriteRange = 1ull << 20;
+    const uint64_t max_range = std::min<uint64_t>(dev.props.limits.maxStorageBufferRange,
+                                                   written ? kWriteRange : kReadRange);
+    if (!max_range) return 0;
+
+    std::vector<std::pair<uint64_t, uint64_t>> candidates;
+    candidates.reserve(capacity);
+    {
+        ParLock plk;
+        std::lock_guard lk(pools_mu);
+        for (const auto& entry : imported) {
+            const Pool& p = entry.second;
+            if (p.last_value < mem_rec_value) continue;
+            if (candidates.size() == capacity) {
+                if (overflow) *overflow = true;
+                break;
+            }
+            const uint64_t size = std::min(p.hi - p.lo, max_range);
+            if (size) {
+                candidates.emplace_back(p.lo, size);
+                if (p.hi - p.lo > size && overflow) *overflow = true;
+            }
+        }
+    }
+
+    size_t count = 0;
+    for (const auto& [guest, size] : candidates) {
+        const BufferRef buffer = gpu_buffer_bind(guest, size, written);
+        if (!buffer) continue;
+        out[count++] = {guest, buffer};
+    }
+    return count;
+}
+
 // ---- mirrors given back ----
 // A mirror was never freed: the retired pools' stayed (every pool remade larger, or taken in by a larger one, kept
 // its VRAM), and pools the game no longer used kept theirs until the mirrors' budget was full; the pools after that

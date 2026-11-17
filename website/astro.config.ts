@@ -12,7 +12,7 @@ export default defineConfig({
   integrations: [repoAssets(), starlight({
     title: 'Longshot',
     description: 'Longshot by Team MagicBean. Guides, project updates, and practical help for your PC adventure.',
-    favicon: '/branding/longshot.png',
+    favicon: '/branding/xbox-hookshot.png',
     customCss: ['./src/styles/theme.css', './src/styles/content.css'],
     components: {
       Header: './src/components/Header.astro',

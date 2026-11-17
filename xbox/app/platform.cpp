@@ -13,8 +13,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdio>
 #include <deque>
 #include <mutex>
+#include <new>
 
 #include "dcomp_shim.h"
 
@@ -128,11 +132,19 @@ void message(const char* title, const char* utf8) {
 struct Stream : IXAudio2VoiceCallback {
     IXAudio2SourceVoice* voice = nullptr;
     std::atomic<int> queued{0};
+    std::mutex drain_mutex;
+    std::condition_variable drained;
     void STDMETHODCALLTYPE OnBufferEnd(void* ctx) override {
         auto* job = static_cast<std::pair<void (*)(void*), void*>*>(ctx);
-        job->first(job->second);
-        delete job;
-        --queued;
+        if (job) {
+            if (job->first) job->first(job->second);
+            delete job;
+        }
+        {
+            std::lock_guard lk(drain_mutex);
+            --queued;
+        }
+        drained.notify_all();
     }
     void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
     void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
@@ -144,51 +156,105 @@ struct Stream : IXAudio2VoiceCallback {
 
 IXAudio2* g_xaudio = nullptr;
 IXAudio2MasteringVoice* g_master = nullptr;
+std::mutex g_audio_mutex;
+
+void log_audio_failure(const char* operation, HRESULT result) {
+    char line[128];
+    std::snprintf(line, sizeof(line), "audio: %s failed (0x%08lx)", operation, static_cast<unsigned long>(result));
+    log_line(line);
+}
 
 void* audio_open(uint32_t rate, uint32_t channels, uint32_t bits) {
-    if (!g_xaudio) {
-        if (FAILED(XAudio2Create(&g_xaudio, 0, XAUDIO2_DEFAULT_PROCESSOR))) return nullptr;
-        if (FAILED(g_xaudio->CreateMasteringVoice(&g_master))) return nullptr;
+    if (!rate || rate > 192000 || !channels || channels > 8 || bits != 16) return nullptr;
+    {
+        std::lock_guard lk(g_audio_mutex);
+        if (!g_xaudio) {
+            const HRESULT created = XAudio2Create(&g_xaudio, 0, XAUDIO2_DEFAULT_PROCESSOR);
+            if (FAILED(created)) {
+                log_audio_failure("XAudio2Create", created);
+                g_xaudio = nullptr;
+                return nullptr;
+            }
+        }
+        if (!g_master) {
+            const HRESULT created = g_xaudio->CreateMasteringVoice(&g_master);
+            if (FAILED(created) || !g_master) {
+                if (FAILED(created)) log_audio_failure("CreateMasteringVoice", created);
+                if (g_master) g_master->DestroyVoice();
+                g_master = nullptr;
+                g_xaudio->Release();
+                g_xaudio = nullptr;
+                return nullptr;
+            }
+        }
     }
     WAVEFORMATEX f{WAVE_FORMAT_PCM, WORD(channels), rate, rate * channels * bits / 8, WORD(channels * bits / 8), WORD(bits), 0};
-    auto* s = new Stream;
-    if (FAILED(g_xaudio->CreateSourceVoice(&s->voice, &f, 0, XAUDIO2_DEFAULT_FREQ_RATIO, s))) {
+    auto* s = new (std::nothrow) Stream;
+    if (!s) return nullptr;
+    HRESULT result = g_xaudio->CreateSourceVoice(&s->voice, &f, 0, XAUDIO2_DEFAULT_FREQ_RATIO, s);
+    if (FAILED(result)) {
+        log_audio_failure("CreateSourceVoice", result);
         delete s;
         return nullptr;
     }
-    s->voice->Start();
+    result = s->voice->Start();
+    if (FAILED(result)) {
+        log_audio_failure("source voice Start", result);
+        s->voice->DestroyVoice();
+        delete s;
+        return nullptr;
+    }
     return s;
 }
 
 int audio_submit(void* stream, const void* data, uint32_t bytes, void (*done)(void*), void* ctx) {
+    if (!stream || !data || !bytes || !done) return 0;
     auto* s = static_cast<Stream*>(stream);
-    auto* job = new std::pair<void (*)(void*), void*>(done, ctx);
+    auto* job = new (std::nothrow) std::pair<void (*)(void*), void*>(done, ctx);
+    if (!job) return 0;
     XAUDIO2_BUFFER b{};
     b.AudioBytes = bytes;
     b.pAudioData = static_cast<const BYTE*>(data);
     b.pContext = job;
     ++s->queued;
-    if (FAILED(s->voice->SubmitSourceBuffer(&b))) {
+    const HRESULT result = s->voice->SubmitSourceBuffer(&b);
+    if (FAILED(result)) {
         --s->queued;
         delete job;
+        log_audio_failure("SubmitSourceBuffer", result);
         return 0;
     }
     return 1;
 }
 
 void audio_reset(void* stream) {
+    if (!stream) return;
     auto* s = static_cast<Stream*>(stream);
-    s->voice->Stop();
-    s->voice->FlushSourceBuffers();   // (each flushed buffer's OnBufferEnd follows)
-    for (int i = 0; i < 2000 && s->queued > 0; ++i) Sleep(1);
-    s->voice->Start();
+    const HRESULT stopped = s->voice->Stop();
+    const HRESULT flushed = s->voice->FlushSourceBuffers();
+    const HRESULT started = s->voice->Start();
+    if (FAILED(stopped) || FAILED(flushed) || FAILED(started)) {
+        if (FAILED(stopped)) log_audio_failure("source voice Stop", stopped);
+        if (FAILED(flushed)) log_audio_failure("FlushSourceBuffers", flushed);
+        if (FAILED(started)) log_audio_failure("source voice Start", started);
+        return;
+    }
+    std::unique_lock lk(s->drain_mutex);
+    if (!s->drained.wait_for(lk, std::chrono::seconds(5), [s] { return s->queued.load() == 0; }))
+        log_line("audio: source voice buffers did not drain after reset; keeping the stream alive");
 }
 
-void audio_volume(void* stream, float v) { static_cast<Stream*>(stream)->voice->SetVolume(v); }
+void audio_volume(void* stream, float v) {
+    if (!stream) return;
+    const HRESULT result = static_cast<Stream*>(stream)->voice->SetVolume(v);
+    if (FAILED(result)) log_audio_failure("source voice SetVolume", result);
+}
 
 void audio_close(void* stream) {
+    if (!stream) return;
     auto* s = static_cast<Stream*>(stream);
     audio_reset(s);
+    if (s->queued.load() != 0) return;
     s->voice->DestroyVoice();
     delete s;
 }

@@ -11,7 +11,7 @@ RUN_ALL_ARGS = ["--cxx", "{cxx}"]
 ROOT = Path(__file__).resolve().parents[1]
 CASES = ("initial_allocation_failure", "payload_allocation_failure", "records_address_zero",
          "records_only_address_zero", "payload_address_zero", "records_only_success", "task_success",
-         "invalid_program", "program_isolation")
+         "no_bda_success", "invalid_program", "program_isolation")
 
 
 def block(source, signature, semicolon=False):

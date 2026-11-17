@@ -7,6 +7,7 @@
 #include "vk_internal.h"
 #include <vk_mem_alloc.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdlib>
 #include <vector>
@@ -14,12 +15,18 @@
 #ifndef LONGSHOT_ENV_H   // (env_on: the switches' one rule)
 #include "longshot_env.h"
 #endif
+#include "vma_heap_limits.h"
 #include "vram_compact.h"
 #include "vk_work.h"   // (last: RX_VK_RECORDER=defer drains before the destructions and the invalidate below)
 
 namespace mkwvk {
 
 VmaAllocator vma;
+
+namespace {
+std::array<VkDeviceSize, VK_MAX_MEMORY_HEAPS> vma_heap_limits{};
+bool vma_memory_boundary_enabled = false;
+}
 
 bool vma_init(PFN_vkGetInstanceProcAddr gipa) {
     VmaVulkanFunctions f{};
@@ -35,6 +42,23 @@ bool vma_init(PFN_vkGetInstanceProcAddr gipa) {
     ci.vulkanApiVersion = std::min<uint32_t>(dev.props.apiVersion, VK_API_VERSION_1_3);
     ci.pVulkanFunctions = &f;
     ci.preferredLargeHeapBlockSize = 64ull << 20;   // (64 MB blocks: Eglantine found 256 MB ones wasted VRAM)
+    const int cap_mb = env_int("RX_VK_MEMORY_MB", 0);
+    vma_memory_boundary_enabled = cap_mb > 0;
+    if (vma_memory_boundary_enabled) {
+        std::vector<uint64_t> heap_sizes;
+        heap_sizes.reserve(dev.memory.memoryHeapCount);
+        for (uint32_t h = 0; h < dev.memory.memoryHeapCount; ++h)
+            heap_sizes.push_back(dev.memory.memoryHeaps[h].size);
+        const auto limits = vma_heap_rule::split_heap_limits(heap_sizes, static_cast<uint64_t>(cap_mb) << 20);
+        uint64_t applied = 0;
+        for (uint32_t h = 0; h < dev.memory.memoryHeapCount; ++h) {
+            vma_heap_limits[h] = limits[h];
+            applied += limits[h];
+        }
+        ci.pHeapSizeLimit = vma_heap_limits.data();
+        logf("vk: VMA allocation boundary: %llu MB across %u heaps (RX_VK_MEMORY_MB=%d)",
+             (unsigned long long)(applied >> 20), dev.memory.memoryHeapCount, cap_mb);
+    }
     return vmaCreateAllocator(&ci, &vma) == VK_SUCCESS;
 }
 
@@ -269,6 +293,7 @@ bool create_buffer(uint64_t size, VkBufferUsageFlags usage, bool host_visible, V
     VmaAllocationCreateInfo ai{};
     ai.usage = VMA_MEMORY_USAGE_AUTO;
     if (host_visible) ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if (vma_memory_boundary_enabled && dev.memory_budget) ai.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
     // (a buffer with VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT gets VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT from VMA:
     // vma_init sets VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)
     static const bool blocks = env_on("RX_VK_BLOCK_BUFFERS");
@@ -289,6 +314,7 @@ bool create_buffer_cached(uint64_t size, VkBufferUsageFlags usage, VkBuffer& buf
     VmaAllocationCreateInfo ai{};
     ai.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
     ai.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    if (vma_memory_boundary_enabled && dev.memory_budget) ai.flags |= VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT;
     if (dedicated) ai.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;   // (its own memory object: no part of a 64 MB block left unused)
     VmaAllocationInfo info{};
     if (vmaCreateBuffer(vma, &bi, &ai, &buffer, &allocation, &info) != VK_SUCCESS) return false;

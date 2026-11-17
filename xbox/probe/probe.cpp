@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <exception>
@@ -303,6 +304,22 @@ void probe_storage() {
 
 // ---- 4. audio and input -------------------------------------------------------------------------------------------
 
+struct ProbeAudioCallback : IXAudio2VoiceCallback {
+    HANDLE completed;
+    HRESULT error = S_OK;
+    explicit ProbeAudioCallback(HANDLE e) : completed(e) {}
+    void STDMETHODCALLTYPE OnBufferEnd(void*) override { SetEvent(completed); }
+    void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT hr) override {
+        error = hr;
+        SetEvent(completed);
+    }
+    void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
+    void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
+    void STDMETHODCALLTYPE OnStreamEnd() override {}
+    void STDMETHODCALLTYPE OnBufferStart(void*) override {}
+    void STDMETHODCALLTYPE OnLoopEnd(void*) override {}
+};
+
 void probe_audio_input() {
     R.section("audio");
     using XAudio2Create_t = HRESULT(WINAPI*)(IXAudio2**, UINT32, XAUDIO2_PROCESSOR);
@@ -322,6 +339,44 @@ void probe_audio_input() {
                 mv->GetVoiceDetails(&d);
                 R.add("output channels / rate", fmt("%u / %u Hz", d.InputChannels, d.InputSampleRate));
                 mv->DestroyVoice();
+
+                HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                if (event) {
+                    ProbeAudioCallback callback(event);
+                    WAVEFORMATEX format{WAVE_FORMAT_PCM, 2, 48000, 192000, 4, 16, 0};
+                    IXAudio2SourceVoice* voice = nullptr;
+                    hr = xa->CreateSourceVoice(&voice, &format, 0, XAUDIO2_DEFAULT_FREQ_RATIO, &callback);
+                    R.add("stereo source voice", hr_text(hr));
+                    if (SUCCEEDED(hr) && voice) {
+                        constexpr size_t frames = 4800;
+                        constexpr double pi = 3.14159265358979323846;
+                        std::vector<int16_t> samples(frames * 2);
+                        for (size_t i = 0; i < frames; ++i) {
+                            const int16_t sample = (int16_t)(std::sin(2.0 * pi * 440.0 * i / 48000.0) * 5000.0);
+                            samples[i * 2] = samples[i * 2 + 1] = sample;
+                        }
+                        XAUDIO2_BUFFER buffer{};
+                        buffer.AudioBytes = (UINT32)(samples.size() * sizeof(samples[0]));
+                        buffer.pAudioData = (const BYTE*)samples.data();
+                        buffer.Flags = XAUDIO2_END_OF_STREAM;
+                        hr = voice->SubmitSourceBuffer(&buffer);
+                        if (SUCCEEDED(hr)) hr = voice->Start();
+                        R.add("source buffer submit/start", hr_text(hr));
+                        if (SUCCEEDED(hr)) {
+                            const DWORD waited = WaitForSingleObject(event, 3000);
+                            R.add("source buffer completion", waited == WAIT_OBJECT_0
+                                                                  ? (FAILED(callback.error) ? "voice error " + hr_text(callback.error)
+                                                                                            : "completed")
+                                                                  : waited == WAIT_TIMEOUT ? "timed out" : "wait failed");
+                        }
+                        voice->Stop();
+                        voice->FlushSourceBuffers();
+                        voice->DestroyVoice();
+                    }
+                    CloseHandle(event);
+                } else {
+                    R.add("source voice event", fmt("failed (%lu)", GetLastError()));
+                }
             }
         }
     }
@@ -828,29 +883,28 @@ void existing_heap_test(Gpu& g, uint8_t* mem, const char* label, ID3D12PipelineS
     R.add(label, fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
 }
 
-// Mesa Dozen's VK_EXT_external_memory_host path uses the newer Device13 API
-// with a one-byte probe size. Test that exact call: Device3's older diagnostic
-// heap API returning E_INVALIDARG does not establish whether Dozen can import
-// the guest allocation.
+// Mesa Dozen's VK_EXT_external_memory_host path uses the newer Device13 API.
+// Report the one-byte diagnostic separately, then test the full aligned allocation
+// even if the one-byte size is rejected.
 void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12PipelineState* pso, ID3D12RootSignature* rs) {
     com_ptr<ID3D12Device13> d13 = g.dev.try_as<ID3D12Device13>();
     if (!d13) { R.add(label, "no ID3D12Device13"); return; }
     for (uint64_t i = 0; i < MB; ++i) mem[i] = uint8_t(i * 7 + 3);
     memset(mem + MB, 0, 2 * MB);
-    HRESULT hr = S_OK;
+    HRESULT size1_result = S_OK;
     {
         com_ptr<ID3D12Heap> heap_probe;
-        hr = d13->OpenExistingHeapFromAddress1(mem, 1, __uuidof(ID3D12Heap), heap_probe.put_void());
+        size1_result = d13->OpenExistingHeapFromAddress1(mem, 1, __uuidof(ID3D12Heap), heap_probe.put_void());
     }
-    if (FAILED(hr)) { R.add(label, "OpenExistingHeapFromAddress1(size=1) " + hr_text(hr)); return; }
     com_ptr<ID3D12Heap> heap;
-    hr = d13->OpenExistingHeapFromAddress1(mem, 16 * MB, __uuidof(ID3D12Heap), heap.put_void());
-    if (FAILED(hr)) { R.add(label, "OpenExistingHeapFromAddress1(size=16MB) " + hr_text(hr)); return; }
+    HRESULT hr = d13->OpenExistingHeapFromAddress1(mem, 16 * MB, __uuidof(ID3D12Heap), heap.put_void());
+    const std::string size1 = "size=1 " + hr_text(size1_result) + "; ";
+    if (FAILED(hr)) { R.add(label, size1 + "size=16MB " + hr_text(hr)); return; }
     D3D12_RESOURCE_DESC bd{D3D12_RESOURCE_DIMENSION_BUFFER, 0, 16 * MB, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
                            D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_CROSS_ADAPTER | D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
     com_ptr<ID3D12Resource> buf;
     hr = g.dev->CreatePlacedResource(heap.get(), 0, &bd, D3D12_RESOURCE_STATE_COMMON, nullptr, __uuidof(ID3D12Resource), buf.put_void());
-    if (FAILED(hr)) { R.add(label, "CreatePlacedResource " + hr_text(hr)); return; }
+    if (FAILED(hr)) { R.add(label, size1 + "CreatePlacedResource " + hr_text(hr)); return; }
     g.begin();
     g.list->CopyBufferRegion(buf.get(), MB, buf.get(), 0, MB);
     if (pso && rs) {
@@ -862,7 +916,7 @@ void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12Pipel
         g.list->Dispatch(16, 1, 1);
     }
     hr = g.run();
-    if (FAILED(hr)) { R.add(label, "GPU work " + hr_text(hr)); return; }
+    if (FAILED(hr)) { R.add(label, size1 + "GPU work " + hr_text(hr)); return; }
     const bool copy_ok = memcmp(mem, mem + MB, MB) == 0;
     std::string shader = "not run";
     if (pso && rs) {
@@ -872,7 +926,7 @@ void existing_heap_test_v13(Gpu& g, uint8_t* mem, const char* label, ID3D12Pipel
         for (uint64_t i = 1; i < 1024 && ok; ++i) ok = o[i] == i * 0x100000001ull + lanes;
         shader = ok ? fmt("ok (wave of %llu)", (unsigned long long)lanes) : "wrong values";
     }
-    R.add(label, fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
+    R.add(label, size1 + fmt("heap ok, GPU copy %s, shader write %s", copy_ok ? "ok" : "WRONG", shader.c_str()));
 }
 
 void probe_d3d12() {

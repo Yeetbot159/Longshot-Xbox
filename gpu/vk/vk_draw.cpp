@@ -50,6 +50,7 @@
 #include "vk_gprof.h"
 #include "vk_jobs.h"
 #include "vk_shader.h"
+#include "guest_address_table.h"
 #include "vk_texture.h"
 #include "movie_upscale_policy.h"
 #include "skip_code.h"
@@ -3568,6 +3569,9 @@ bool table_track_open(int logged, int seen, int unlimited) {
     return logged < 60 && (unlimited || seen < kTableTrackLooks);
 }
 
+bool fallback_records_payload_descriptors(const Program& p, VkDescriptorBufferInfo out[2]);
+bool fallback_indirect_descriptor(const DrawArgs* d, VkDescriptorBufferInfo* out);
+
 /// A program's descriptor counts in one word (Program::desc_counts): buffers, images, texel views, 21 bits each.
 /// ~0: not counted, or a count that does not fit (then they are counted at every build, as before)
 uint64_t desc_counts_pack(size_t nbuf, size_t nimg, size_t nview) {
@@ -3580,7 +3584,7 @@ void desc_counts_unpack(uint64_t packed, size_t* nbuf, size_t* nimg, size_t* nvi
     *nbuf = (size_t)(packed & kMask), *nimg = (size_t)(packed >> 21 & kMask), *nview = (size_t)(packed >> 42 & kMask);
 }
 
-void build_descriptors(const NvnState& s, const Program& p) {
+void build_descriptors(const NvnState& s, const Program& p, const DrawArgs* draw = nullptr) {
     // (longshot) the thread's writer asked for once: each dw() is a thread-local lookup, a call in a shared library, and a
     // build made dozens of them
     DescWriter& out = dw();
@@ -3629,6 +3633,9 @@ void build_descriptors(const NvnState& s, const Program& p) {
     for (const Stage& st : p.stages) {
         const Shader::Info& info = st.info;
         const int ns = st.nvn_stage;
+        std::array<GuestPoolBinding, Shader::GuestAddressTable::kPoolCount> guest_pools{};
+        size_t guest_pool_count = 0;
+        std::array<uint64_t, Shader::GuestAddressTable::kPoolCount * 2> guest_pool_metadata{};
         for (const auto& d : info.constant_buffer_descriptors) {
             VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, d.count);
             const size_t first = out.bufs.size();
@@ -3641,6 +3648,89 @@ void build_descriptors(const NvnState& s, const Program& p) {
             out.writes.push_back(w);
         }
         for (const auto& d : info.storage_buffers_descriptors) {
+            if (Shader::GuestAddressTable::IsMetadata(d)) {
+                bool overflow = false;
+                guest_pool_count = memory_guest_pool_bindings(guest_pools.data(), guest_pools.size(), d.is_written, &overflow);
+                for (size_t i = 0; i < guest_pool_count; i++) {
+                    guest_pool_metadata[i * 2] = guest_pools[i].guest;
+                    guest_pool_metadata[i * 2 + 1] = guest_pools[i].buffer.size;
+                }
+                if (overflow) {
+                    static std::atomic<int> logged{0};
+                    if (logged++ < 12)
+                        logf("vk: guest-pool fallback for %016llx stage %d is bounded to %zu ranges",
+                             (unsigned long long)p.key, ns, guest_pools.size());
+                }
+                BufferRef metadata = stream_copy(guest_pool_metadata.data(), sizeof(guest_pool_metadata));
+                if (!metadata) {
+                    guest_pool_count = 0;
+                    static std::atomic<int> logged{0};
+                    if (logged++ < 8) logf("vk: guest-pool metadata upload failed for %016llx", (unsigned long long)p.key);
+                }
+                VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);
+                const size_t first = out.bufs.size();
+                if (metadata) {
+                    out.bufs.push_back({metadata.buffer, metadata.offset, metadata.size});
+                } else if (dev.null_descriptor) {
+                    out.bufs.push_back({VK_NULL_HANDLE, 0, VK_WHOLE_SIZE});
+                } else {
+                    out.bufs.push_back({zero_buffer, 0, sizeof(guest_pool_metadata)});
+                }
+                w.pBufferInfo = &out.bufs[first];
+                out.writes.push_back(w);
+                continue;
+            }
+            if (Shader::GuestAddressTable::IsPoolArray(d)) {
+                VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, d.count);
+                const size_t first = out.bufs.size();
+                for (size_t i = 0; i < d.count; i++) {
+                    if (i < guest_pool_count) {
+                        const BufferRef& b = guest_pools[i].buffer;
+                        out.bufs.push_back({b.buffer, b.offset, b.size});
+                        if (d.is_written) {
+                            ParLock lk;
+                            memory_stamp_gpu(guest_pools[i].guest, b.size);
+                        }
+                    } else if (dev.null_descriptor) {
+                        out.bufs.push_back({VK_NULL_HANDLE, 0, VK_WHOLE_SIZE});
+                    } else {
+                        out.bufs.push_back({zero_buffer, 0, 16});
+                    }
+                }
+                w.pBufferInfo = &out.bufs[first];
+                out.writes.push_back(w);
+                continue;
+            }
+            if (Shader::MeshFallbackBuffers::IsBuffersArray(d)) {
+                VkDescriptorBufferInfo descriptors[2]{};
+                if (!fallback_records_payload_descriptors(p, descriptors)) {
+                    static std::atomic<int> logged{0};
+                    if (logged++ < 8) logf("vk: mesh fallback buffers unavailable for %016llx", (unsigned long long)p.key);
+                    descriptors[0] = {zero_buffer, 0, 16};
+                    descriptors[1] = {zero_buffer, 0, 16};
+                }
+                VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, d.count);
+                const size_t first = out.bufs.size();
+                for (uint32_t i = 0; i < d.count; i++) out.bufs.push_back(descriptors[i]);
+                w.pBufferInfo = &out.bufs[first];
+                out.writes.push_back(w);
+                continue;
+            }
+            if (Shader::MeshFallbackBuffers::IsIndirectInput(d)) {
+                VkDescriptorBufferInfo descriptor{};
+                if (!fallback_indirect_descriptor(draw, &descriptor)) {
+                    static std::atomic<int> logged{0};
+                    if (logged++ < 8) logf("vk: mesh fallback indirect input unavailable for %016llx",
+                                           (unsigned long long)p.key);
+                    descriptor = {zero_buffer, 0, 16};
+                }
+                VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1);
+                const size_t first = out.bufs.size();
+                out.bufs.push_back(descriptor);
+                w.pBufferInfo = &out.bufs[first];
+                out.writes.push_back(w);
+                continue;
+            }
             FINE_SCOPE(FT_STORAGE);
             FINE_N(FC_SSBO_DESCS, d.count);
             VkWriteDescriptorSet w = write(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, d.count);
@@ -4300,7 +4390,7 @@ void push_constants(VkCommandBuffer cmd, const Program& p, const Targets* at, ui
         const uint64_t firsts = mesh_args_address + 12;
         std::memcpy(data + Shader::Backend::SPIRV::MESH_FIRST_PUSH_OFFSET, &firsts, 8);
     }
-    if (p.fallback) {   // (the fallback's records and payloads, pushed as addresses)
+    if (p.fallback) {   // (the fallback's record/payload addresses, or the no-BDA indirect-input flag)
         std::memcpy(data + Shader::Backend::SPIRV::MESH_FALLBACK_PAYLOAD_PUSH_OFFSET, &fallback_payload_address, 8);
         std::memcpy(data + Shader::Backend::SPIRV::MESH_FALLBACK_RECORDS_PUSH_OFFSET, &fallback_records_address, 8);
         std::memcpy(data + Shader::Backend::SPIRV::MESH_FALLBACK_INDIRECT_INPUT_PUSH_OFFSET, &fallback_indirect_input, 8);
@@ -4503,7 +4593,7 @@ thread_local bool work_since_barrier = false;   // (GPU work recorded since the 
 // what the command buffer has bound (draws skip what is already there)
 thread_local bool last_desc_valid = false;
 thread_local const Program* last_desc_prog = nullptr;
-thread_local uint64_t last_desc_bind = 0, last_desc_reg = 0, last_desc_ub = 0, last_desc_dgen = 0;
+thread_local uint64_t last_desc_bind = 0, last_desc_reg = 0, last_desc_ub = 0, last_desc_dgen = 0, last_desc_guest = 0;
 // (Descriptor reuse: the versions of the slots the last build resolved, the samplers' generation it saw, and whether it
 // sampled an unregistered slot; the same draw keeps its descriptors while none of those moved)
 TLS_OBJECT(last_desc_fp, std::vector<uint64_t>)
@@ -5494,6 +5584,7 @@ void probe_draw(const NvnState& s, const Program& p, int pass_draws) {
         }
         // (the storage buffers too: where each is, how long, and what guest memory holds of it)
         for (const auto& d : st.info.storage_buffers_descriptors) {
+            if (Shader::GuestAddressTable::IsMetadata(d) || Shader::GuestAddressTable::IsPoolArray(d)) continue;
             for (uint32_t k = 0; k < d.count && k < 8; k++) {
                 const uint32_t off = d.cbuf_offset + k * 16;
                 // (amd-fix) through the stage's banks as its program reads them: a storage buffer named in c1 (the program's
@@ -6567,9 +6658,7 @@ uint64_t fallback_buffer_address(VkBuffer buffer) {
 bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
     if (!p.fallback_vertices_per_workgroup || !p.fallback_record_words) return false;
     const uint64_t capacity = Shader::Backend::SPIRV::MESH_FALLBACK_CAPACITY;
-    // (the header, the draw's command, the allocator and the mesh dispatch, and then a fixed area every program takes records
-    // from, a primitive's corners at a time: only the primitives the mesh workgroups output, not a slot's worst case each.
-    // Slots a primitive could fill were ~650 MB for the floor grass's ~13900 slots; it outputs ~17 MB)
+    // (the header and a bounded record area shared by the program; the mesh epilogue allocates only records it actually emits)
     const uint64_t records = (uint64_t)(Shader::Backend::SPIRV::MESH_FALLBACK_HEADER_WORDS +
                                         Shader::Backend::SPIRV::MESH_FALLBACK_RECORD_WORDS) * 4;
     // (per thread, not per program: one program needing more than this is left out instead of taking the budget)
@@ -6592,7 +6681,7 @@ bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
     if (!create_buffer(records, usage | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, false, f.records, f.records_mem, &mapped)) return false;
     f.records_address = fallback_buffer_address(f.records);
     f.records_bytes = records;
-    if (!f.records_address) {
+    if (!p.fallback_storage_buffers && !f.records_address) {
         destroy_buffer(f.records, f.records_mem);
         return false;
     }
@@ -6603,7 +6692,7 @@ bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
         }
         f.payload_address = fallback_buffer_address(f.payload);
         f.payload_bytes = payload;
-        if (!f.payload_address) {
+        if (!p.fallback_storage_buffers && !f.payload_address) {
             destroy_buffer(f.payload, f.payload_mem);
             destroy_buffer(f.records, f.records_mem);
             return false;
@@ -6611,6 +6700,26 @@ bool fallback_buffers_of(const Program& p, FallbackBuffers*& out) {
     }
     sets.push_back(f);
     out = &sets.back();
+    return true;
+}
+
+bool fallback_records_payload_descriptors(const Program& p, VkDescriptorBufferInfo out[2]) {
+    FallbackBuffers* buffers = nullptr;
+    if (!fallback_buffers_of(p, buffers)) return false;
+    out[0] = {buffers->records, 0, buffers->records_bytes};
+    out[1] = buffers->payload ? VkDescriptorBufferInfo{buffers->payload, 0, buffers->payload_bytes}
+                              : VkDescriptorBufferInfo{zero_buffer, 0, 16};
+    return true;
+}
+
+bool fallback_indirect_descriptor(const DrawArgs* d, VkDescriptorBufferInfo* out) {
+    if (!d || !d->indirect) {
+        *out = {zero_buffer, 0, 16};
+        return true;
+    }
+    const BufferRef input = gpu_buffer_bind(d->indirect, 16, false);
+    if (!input) return false;
+    *out = {input.buffer, input.offset, input.size};
     return true;
 }
 
@@ -6751,9 +6860,13 @@ bool fallback_record(VkCommandBuffer cmd, Program& p, const DrawArgs& d) {
     }
     FallbackBuffers* f = nullptr;
     if (!fallback_buffers_of(p, f) || !fallback_pipelines_ready(p)) return false;
-    const BufferRef input = p.fallback_task && d.indirect ? gpu_buffer_bind(d.indirect, 8, false) : BufferRef{};
+    if (p.fallback_storage_buffers && p.fallback_task && d.indirect && !gpu_buffer_bind(d.indirect, 16, false)) return false;
+    const BufferRef input = p.fallback_task && d.indirect && !p.fallback_storage_buffers
+                                ? gpu_buffer_bind(d.indirect, 16, false)
+                                : BufferRef{};
     const VkDeviceAddress input_base = input ? fallback_buffer_address(input.buffer) : 0;
-    fallback_indirect_input = input_base ? input_base + input.offset : 0;
+    fallback_indirect_input = p.fallback_storage_buffers ? (d.indirect ? 1 : 0)
+                                                         : input_base ? input_base + input.offset : 0;
     fallback_payload_address = f->payload_address;
     fallback_records_address = f->records_address;
     const uint32_t capacity = Shader::Backend::SPIRV::MESH_FALLBACK_CAPACITY;
@@ -7404,6 +7517,11 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     // last use, a use the reused set no longer counted. The draws after it sampled freed memory, whatever the driver put there next:
     // plants and fences glowing white on a Legion Go S, which RX_VK_DESC_REUSE=never took away (issue 1126)
     const uint64_t reg_gen = registrations_generation(), ub_gen = ub_generation();
+    const bool guest_pool_table = std::any_of(p.stages.begin(), p.stages.end(), [](const Stage& st) {
+        return std::any_of(st.info.storage_buffers_descriptors.begin(), st.info.storage_buffers_descriptors.end(),
+                           Shader::GuestAddressTable::IsMetadata);
+    });
+    const uint64_t guest_stamp = guest_pool_table ? gpu_bind_stamp() : 0;
     static const bool no_reuse = desc_reuse_level() == 0;   // (RX_VK_DESC_REUSE=never: every draw builds its own)
     const uint64_t dgen = texture_destroy_generation();
     // (longshot, issue 640: a mesh fallback draw also pushes the writes at the compute bind point, for its task and mesh
@@ -7413,6 +7531,8 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     const bool slotgen = desc_slotgen_on();
     const bool same_desc = !no_reuse && last_desc_valid && last_desc_prog == &p && last_desc_bind == s.bind_gen &&
                            last_desc_ub == ub_gen && last_desc_dgen == dgen &&
+                           !(p.fallback_storage_buffers && p.fallback_task && d.indirect) &&
+                           (!guest_pool_table || last_desc_guest == guest_stamp) &&
                            (slotgen ? last_desc_fp_on && desc_slots_kept(reg_gen) : last_desc_reg == reg_gen) &&
                            (!p.fallback || dw().prog == &p);
     if (p.fallback && !same_desc && dw().prog != &p && last_desc_valid && last_desc_prog == &p) {
@@ -7424,7 +7544,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         PROF_HOT(PROF_DESC);
         FINE_N(FC_BUILDS, 1);
         trace_tex_hit = nullptr, trace_tex_mask = 0;
-        build_descriptors(s, p);   // (textures first used here are uploaded by the recording's upload command buffer)
+        build_descriptors(s, p, &d);   // (textures first used here are uploaded by the recording's upload command buffer)
         FINE_N(FC_WRITES, (int64_t)dw().writes.size());
         static std::string last_logged;
         if (dump_on()) {
@@ -7557,7 +7677,7 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         FINE_SCOPE(FT_BINDDESC);
         if (!bind_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, p)) SKIP_HERE();
         last_desc_valid = true, last_desc_prog = &p, last_desc_bind = s.bind_gen, last_desc_reg = reg_gen;
-        last_desc_ub = ub_gen, last_desc_dgen = dgen;
+        last_desc_ub = ub_gen, last_desc_dgen = dgen, last_desc_guest = guest_pool_table ? gpu_bind_stamp() : 0;
         last_desc_fp_on = desc_fp_on;
         if (desc_fp_on)   // (Descriptor reuse: what its handles resolved; the next such draw may keep it through other slots' churn)
             last_desc_fp() = desc_fp(), last_desc_fp_dummy = desc_fp_dummy, last_desc_samp = desc_samp_seen,
@@ -10043,6 +10163,7 @@ void dispatch(VkCommandBuffer cmd, NvnState& s, uint32_t x, uint32_t y, uint32_t
         if (!p.stages.empty()) {   // the translated program's own storage bindings: which constant-buffer word names each
             const auto& sd = p.stages[0].info.storage_buffers_descriptors;
             for (size_t i = 0; i < sd.size() && n < 1700; i++) {
+                if (Shader::GuestAddressTable::IsMetadata(sd[i]) || Shader::GuestAddressTable::IsPoolArray(sd[i])) continue;
                 const uint32_t off = sd[i].cbuf_offset;
                 const uint64_t a = stage_cbuf_word(s, p.stages[0], sd[i].cbuf_index, off) |
                                    (uint64_t)stage_cbuf_word(s, p.stages[0], sd[i].cbuf_index, off + 4) << 32;

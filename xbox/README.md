@@ -1,7 +1,11 @@
+<p align="center">
+  <img src="../assets/branding/xbox-hookshot.png" alt="Longshot Xbox hookshot logo" width="220">
+</p>
+
 # Longshot on Xbox Series X|S (Developer Mode)
 
 An experimental port of Longshot to Xbox consoles in Developer Mode, as a UWP app, the way the Xbox Emulation Hub's
-ports are installed. **It does not play the game yet: there is no picture.** What is here now:
+ports are installed. **Xbox gameplay remains unverified.** What is here now:
 
 - **Longshot** (`xbox/app`), the app a player installs: it finds their game files on a USB drive, has a **Series S**
   and a **Series X** mode, estimates the build on this console, and starts a built game module with its sound,
@@ -32,9 +36,10 @@ with the controller (D-pad, A):
 | --- | --- |
 | Console | The model, from `GetGamingDeviceModelInformation`, and the memory the console gives the app |
 | Mode | **Auto** (the console's own), **Series S** or **Series X**; written into `longshot_options.ini` in the app's LocalState at once |
-| Game files | The folders on the USB drives holding `romfs\` and `exefs\main` (two levels down) |
-| Build | Measures this console's CPU and estimates the build in the chosen mode |
-| Play | Loads `<drive>\Longshot\work\build\longshot_game.dll` and starts the game |
+| ROMFS folder | Cycle through detected `romfs\` folders on removable storage, including `Longshot\game\romfs`; press A to rescan |
+| ExeFS folder | Independently cycle through detected `exefs\` folders containing `main`, including `Longshot\game\ExeFS` |
+| Build | Compiles from the selected folders on-console; estimates the build when its tools are unavailable |
+| Play | Loads `<ROMFS drive>\Longshot\game\longshot_game.dll` and starts the game with the selected ROMFS |
 
 The modes use the consoles' published hardware specifications as starting points, not as promises about what a UWP
 app can use. Series S has an 8-core Zen 2 CPU, a 20-CU RDNA 2 GPU rated at 4 TFLOPS, and 10 GB GDDR6 (8 GB at
@@ -48,12 +53,18 @@ and graphics allocations count against the same practical budget. We measure the
 compiler and linker on each console before setting job counts or claiming the build fits. ([Xbox UWP resources](https://learn.microsoft.com/en-us/previous-versions/windows/uwp/xbox-apps/system-resource-allocation), [expandedResources](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/app-capability-declarations), [expected app limit](https://learn.microsoft.com/en-us/uwp/api/windows.system.memorymanager.expectedappmemoryusagelimit))
 
 The launcher package now carries CPython, its build dependencies, and llvm-mingw and attempts to run the existing
-`nx2/make_game.py` pipeline on the console. The Series S probe measured a 5,120 MB app memory limit, a 4,864 MB
-commit ceiling, executable generated code, and successful creation of a child copy of the probe. The builder uses
-one compile job with a 3 GB compiler budget and leaves the work tree with the selected game files. The probe did not
+`nx2/make_game.py` pipeline on the console. ROMFS and ExeFS can be chosen independently; the build work and resulting
+module stay on the selected ROMFS drive under `Longshot\work` and `Longshot\game`. The Series S probe measured a
+5,120 MB app memory limit, a 4,864 MB commit ceiling, executable generated code, and successful creation of a child
+copy of the probe. The builder uses one compile job with a 3 GB compiler budget. The probe did not
 try to start Python or clang, and this builder has not yet been run on the console; package-process restrictions,
 memory use during linking, and writable USB discovery are still open. It is an experimental implementation, not a
 verified console build.
+
+The Series S game profile also limits renderer shader/pipeline workers and asynchronous shader-load workers to one
+each; Series X allows two each. This reduces transient compiler concurrency against the consoles' shared CPU/GPU
+memory limits, at the cost of slower shader preparation and first use. These are conservative settings, not a measured
+guarantee that the complete renderer stays within the app's memory ceiling.
 
 The package declares `removableStorage` for the player's USB drive. It does not declare `broadFileSystemAccess`, which
 Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://learn.microsoft.com/en-us/uwp/extension-sdks/uwp-limitations-on-xbox))
@@ -64,8 +75,12 @@ Microsoft documents as unsupported on Xbox. ([Xbox UWP limitations](https://lear
 | Quality preset | Minimum (`quality_preset=1`) | Low (`quality_preset=2`) |
 | Frame rate | 60 (`frame_rate_cap=0`) | 60 |
 | Texture budget | 768 MB (`RX_VK_VRAM_MB`) | 1.5 GB |
+| Imported-pool mirror cap | 256 MB (`RX_VK_MIRROR_MB`) | 512 MB |
+| VMA renderer allocation cap | up to 2 GB | up to 4 GB |
 | Image pool at start | off (`RX_VK_IMAGE_PREALLOC=0`) | off |
 | Files compiled at once by the builder | 1 | 2 |
+
+At launch, the renderer cap is at most half of `ExpectedAppMemoryUsageLimit`, further limited to 2 GB on Series S or 4 GB on Series X. If the expected limit is unavailable, the launcher uses a conservative 2 GB cap. VMA's per-heap limits enforce it even when `VK_EXT_memory_budget` is unavailable. This is not a total app-memory boundary: game/host allocations and non-VMA imports are not included; imported mirrors have their separate cap. Microsoft documents that the current `AppMemoryUsageLimit` can grow and that `ExpectedAppMemoryUsageLimit` reports the expected upper cap. The Series S probe measured 5,120 MB; the Series X profile's 8,192 MB still needs an on-console probe.
 
 `xbox\app\test\run.ps1` checks the portable parts on a PC (21 checks): the model ids, the modes' choice, the options
 file kept intact but for the mode's lines, the estimate, and the drive search.
@@ -98,7 +113,9 @@ library alone, so a desktop function that isn't replaced fails the link.
 `LONGSHOT_XBOX=1` makes `nx2/build.py` build `longshot_game.dll` for the app instead of `longshot.exe`, with llvm-mingw:
 the consoles' Zen 2 (`RX_MARCH=znver2` unless given), emulated thread-locals, `LONGSHOT_UWP`, `host/uwp` in place of
 `host/display.c`, and a link against `libwindowsapp.a` alone (plus the C and C++ runtimes, whose DLLs the app
-carries). No renderer is built: the app package has it.
+carries). No renderer is built: the app package has it. The launcher passes the selected ROMFS and ExeFS paths to
+`make_game.py`; output is installed at `<ROMFS drive>\Longshot\game` and intermediate files stay in
+`<ROMFS drive>\Longshot\work`.
 
     set LONGSHOT_XBOX=1
     set LONGSHOT_MINGW=<llvm-mingw folder>
@@ -128,19 +145,25 @@ Series X|S devkits; this probe therefore describes the current UWP/Dozen API pat
 ([Microsoft's Simple Mesh Shader sample](https://learn.microsoft.com/en-us/samples/microsoft/xbox-gdk-samples/simplemeshshader/)).
 Dozen exposes Vulkan buffer device addresses only when the D3D12 shader model is at least 6.6
 ([upstream Dozen capability checks](https://chromium.googlesource.com/external/gitlab.freedesktop.org/mesa/mesa/+/dbbd251b6f00db68c1e9f0b7e8504b3b4278eaac/src/microsoft/vulkan/dzn_device.c));
-this console reports 6.4, so Dozen will not expose the address feature these guest shaders require. Longshot's existing
-mesh-to-compute fallback also requires buffer device addresses, and cannot solve that. The renderer now stops with a
-specific capability message instead of reaching shader pipeline creation and failing later. The updated probe also
-checks whether shader model 6.4 can create a pipeline with a bounded, non-uniform SRV descriptor array. That result
-will guide a UWP-safe address-table lowering path; the current guest pipeline path still needs that work.
+this console reports 6.4, so Dozen will not expose the address feature these guest shaders require. When BDA is missing,
+the renderer now enters a limited bound-buffer compatibility mode instead of stopping at startup. Global memory loads
+can also search a fixed table of up to eight imported pools already used by the current recording; the table uses
+statically indexed storage-buffer descriptors and caps each pool range to 64 MiB (1 MiB for opt-in global stores).
+Pointers outside those ranges remain untranslated and overflow is logged. A descriptor-backed mesh-to-compute fallback
+is also implemented for adapters with host-memory import, shader int64, and sufficient descriptor limits, but it has
+not been validated on Xbox. These experimental paths do not establish complete rendering. The Series S probe package
+0.2.2 successfully created a shader-model 6.4 pipeline with a bounded,
+non-uniform SRV descriptor array, a promising prerequisite for a UWP-safe address-table path. It does not establish
+that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh fallback works; the updated Device13
+import test still needs to be run on the console.
 
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
 probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExistingHeapFromAddress` test returned
-`E_INVALIDARG`, but Dozen uses `ID3D12Device13::OpenExistingHeapFromAddress1` with a one-byte size. The updated
-probe tests that exact API on ordinary and reserved-window memory and verifies GPU reads and writes through the
-resulting heap. Until that run is collected, zero-copy import into Dozen remains unverified. The renderer now also
-logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing; this checks one
-prerequisite for a future address-table lowering path, which is not implemented yet. The renderer source compiles and
+`E_INVALIDARG`. The current probe separately records the one-byte result and still attempts
+`ID3D12Device13::OpenExistingHeapFromAddress1` with the full aligned 16 MB allocation, on ordinary and reserved-window
+memory, before checking GPU reads and writes. The attached Series S report came from probe package 0.2.2.0 and did not
+include that newer test; zero-copy import into Dozen remains unverified until the updated probe is run. The renderer now also
+logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing. The renderer source compiles and
 the package includes Mesa Dozen, but no Series S pipeline or frame has been verified.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,

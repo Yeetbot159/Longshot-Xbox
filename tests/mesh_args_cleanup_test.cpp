@@ -17,7 +17,7 @@ constexpr VkBufferUsageFlags VK_BUFFER_USAGE_TRANSFER_DST_BIT = 2;
 constexpr VkBufferUsageFlags VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 4;
 constexpr int VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO = 1;
 struct VkBufferDeviceAddressInfo { int sType; VkBuffer buffer = 0; };
-struct { int device = 1; } dev;
+struct { int device = 1; struct { bool bufferDeviceAddress = true; } vk12; } dev;
 
 static Allocation confirmed, poison;
 static std::vector<uint32_t> storage;

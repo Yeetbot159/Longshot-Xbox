@@ -69,6 +69,7 @@ struct Program {
     // (longshot) the GPU has no mesh shaders: the task and mesh stages are compute pipelines, and a generated vertex
     // stage reads the records they write. Its stages are (task,) mesh, vertex, fragment.
     bool fallback = false;
+    bool fallback_storage_buffers = false;
     bool fallback_task = false;   // (a task stage before the mesh stage: its payloads are per mesh workgroup)
     VkPrimitiveTopology fallback_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     uint32_t fallback_vertices_per_workgroup = 1;   // (max primitives x corners: the records of one mesh workgroup)

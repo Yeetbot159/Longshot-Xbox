@@ -39,6 +39,7 @@ struct Profile {
     const char* name;           // "Series S"
     const char* summary;        // one line for the launcher
     uint32_t memory_mb;         // what a Game is expected to get, CPU and GPU together
+    uint32_t renderer_memory_mb; // maximum VMA allocation budget for this profile
     unsigned compile_jobs;      // files the on-console builder compiles at once (0.8-1.7 GB each)
     std::vector<std::pair<std::string, std::string>> options;   // longshot_options.ini lines the mode sets
     std::vector<std::pair<std::string, std::string>> env;       // environment for the game's start
@@ -48,6 +49,7 @@ const Profile& series_s();
 const Profile& series_x();
 // The mode the player chose; Auto picks by the console, and an unknown console gets the Series S's (the safer one).
 const Profile& profile_for(Mode mode, Model console);
+uint32_t renderer_memory_cap_mb(const Profile& profile, uint64_t expected_limit_bytes);
 
 // longshot_options.ini with the profile's lines set: each of its keys replaced where the file has it, added where not,
 // every other line kept as it was (the player's controls, their other settings).
