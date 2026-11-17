@@ -23,6 +23,12 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- USB discovery now recognizes the supplied `<drive>\Longshot\game\romfs` and
+  `<drive>\Longshot\game\ExeFS\main` layout without scanning the build-work directory.
+- XAudio initialization and reset handling now report failures and wait for queued buffers to drain before freeing a
+  stream. The probe also creates a stereo source voice, plays a brief tone, and records its completion callback.
+- When Vulkan BDA is unavailable, the renderer log now records fixed-array indexing, descriptor indexing, host-memory
+  import, and descriptor limits together to guide a future bounded guest-address implementation.
 - ROMFS and ExeFS are discovered, selected, and persisted independently. The selected ROMFS and ExeFS folders can
   reside on different removable drives. Build work stays under `<ROMFS drive>\Longshot\work`, and the game module is
   installed under `<ROMFS drive>\Longshot\game`.
@@ -38,16 +44,20 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## Experimental status and limitations
 
-The Series S probe package 0.2.2.0 reported shader model 6.4, D3D12 mesh shader tier 0, and successful creation of a
-bounded non-uniform SRV-array pipeline. Its older `ID3D12Device3::OpenExistingHeapFromAddress` test returned
-`E_INVALIDARG`; that package did not include the current full-size `ID3D12Device13::OpenExistingHeapFromAddress1`
-test. The current probe's full-size import result has not been collected.
+The available Series S probe report is from package 0.2.5.0 and is incomplete before the D3D12 results. An earlier
+0.2.2.0 report measured shader model 6.4, D3D12 mesh shader tier 0, and successful creation of a bounded non-uniform
+SRV-array pipeline. Its older `ID3D12Device3::OpenExistingHeapFromAddress` test returned `E_INVALIDARG`; the current
+probe tests a full-size `ID3D12Device13::OpenExistingHeapFromAddress1` import and XAudio source playback, but neither
+result has been collected from the console.
 
 When Vulkan buffer device addresses (BDA) are unavailable, the renderer enters a limited bound-buffer compatibility
 mode. Arbitrary guest-pointer translation and the mesh compute fallback still require implementation; rendering and
 full gameplay have not been verified on Series S or Series X. The UWP/Dozen mesh-tier result describes this app path,
 not the console silicon's separate GDK capabilities. The Series S probe also measured a 5,120 MB app memory limit
-and a 4,864 MB CPU commit ceiling. On-console Python/clang building and a Series X probe remain unverified.
+and a 4,864 MB CPU commit ceiling. Current upstream Dozen gates BDA and descriptor indexing at D3D12 shader model 6.6;
+the reported 6.4 path supports fixed-size dynamically indexed storage-buffer arrays but not nonuniform indexing or
+runtime descriptor arrays. A bounded guest-address table still needs implementation and validation against the
+adapter's descriptor budget. On-console Python/clang building and a Series X probe remain unverified.
 
 The packages contain no game files or data derived from a game. The certificate is public and contains no private
 signing key. After installing, set the app type to **Game** in Dev Home for useful memory measurements.

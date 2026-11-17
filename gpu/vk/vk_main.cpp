@@ -643,16 +643,19 @@ bool create_device() {
         return false;
     }
     if (!f12.bufferDeviceAddress) {
-        // Longshot's Xbox address-table path is not implemented yet. Record the exact Vulkan
-        // storage-buffer indexing support available on the adapter so a console log can tell us
-        // whether the bounded-array probe has a Vulkan equivalent on Dozen.
+        // A bounded guest-address table still needs implementation. Record the exact Vulkan
+        // indexing and host-import support available on the adapter; Dozen gates nonuniform
+        // descriptor indexing and BDA on shader model 6.6, while fixed arrays may work below it.
         const VkPhysicalDeviceLimits& limits = dev.props.limits;
-        logf("vk: address-table prerequisites (not implemented): storage-buffer dynamic indexing %s, nonuniform indexing %s, "
-             "runtime arrays %s, per-stage storage buffers %u, descriptor-set storage buffers %u, shader int64 %s",
+        logf("vk: address-table prerequisites (not implemented): fixed storage-buffer array indexing %s, descriptor indexing %s, "
+             "nonuniform indexing %s, runtime arrays %s, external-memory-host %s, per-stage storage buffers %u, "
+             "descriptor-set storage buffers %u, shader int64 %s",
              f.features.shaderStorageBufferArrayDynamicIndexing ? "yes" : "no",
+             f12.descriptorIndexing ? "yes" : "no",
              f12.shaderStorageBufferArrayNonUniformIndexing ? "yes" : "no",
-             f12.runtimeDescriptorArray ? "yes" : "no", limits.maxPerStageDescriptorStorageBuffers,
-             limits.maxDescriptorSetStorageBuffers, f.features.shaderInt64 ? "yes" : "no");
+             f12.runtimeDescriptorArray ? "yes" : "no", dev.external_memory_host ? "yes" : "no",
+             limits.maxPerStageDescriptorStorageBuffers, limits.maxDescriptorSetStorageBuffers,
+             f.features.shaderInt64 ? "yes" : "no");
         logf("vk: no VK_KHR_buffer_device_address: starting in bound-buffer compatibility mode; "
              "physical guest pointers and mesh compute fallback are disabled");
     }
