@@ -49,7 +49,14 @@ void scan(const fs::path& root, const fs::path& dir, int depth, Kind kind, std::
     for (fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
         std::error_code e2;
         const fs::path name = it->path().filename();
-        if (!it->is_directory(e2) || name == "Longshot" || name == "System Volume Information" || name == "$RECYCLE.BIN") continue;
+        if (!it->is_directory(e2)) continue;
+        if (name == "Longshot") {
+            const fs::path game = it->path() / "game";
+            std::error_code game_ec;
+            if (fs::is_directory(game, game_ec)) scan(root, game, 1, kind, out);
+            continue;
+        }
+        if (name == "System Volume Information" || name == "$RECYCLE.BIN") continue;
         scan(root, it->path(), depth - 1, kind, out);
     }
 }

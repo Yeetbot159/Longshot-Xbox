@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <exception>
@@ -303,6 +304,22 @@ void probe_storage() {
 
 // ---- 4. audio and input -------------------------------------------------------------------------------------------
 
+struct ProbeAudioCallback : IXAudio2VoiceCallback {
+    HANDLE completed;
+    HRESULT error = S_OK;
+    explicit ProbeAudioCallback(HANDLE e) : completed(e) {}
+    void STDMETHODCALLTYPE OnBufferEnd(void*) override { SetEvent(completed); }
+    void STDMETHODCALLTYPE OnVoiceError(void*, HRESULT hr) override {
+        error = hr;
+        SetEvent(completed);
+    }
+    void STDMETHODCALLTYPE OnVoiceProcessingPassStart(UINT32) override {}
+    void STDMETHODCALLTYPE OnVoiceProcessingPassEnd() override {}
+    void STDMETHODCALLTYPE OnStreamEnd() override {}
+    void STDMETHODCALLTYPE OnBufferStart(void*) override {}
+    void STDMETHODCALLTYPE OnLoopEnd(void*) override {}
+};
+
 void probe_audio_input() {
     R.section("audio");
     using XAudio2Create_t = HRESULT(WINAPI*)(IXAudio2**, UINT32, XAUDIO2_PROCESSOR);
@@ -322,6 +339,44 @@ void probe_audio_input() {
                 mv->GetVoiceDetails(&d);
                 R.add("output channels / rate", fmt("%u / %u Hz", d.InputChannels, d.InputSampleRate));
                 mv->DestroyVoice();
+
+                HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                if (event) {
+                    ProbeAudioCallback callback(event);
+                    WAVEFORMATEX format{WAVE_FORMAT_PCM, 2, 48000, 192000, 4, 16, 0};
+                    IXAudio2SourceVoice* voice = nullptr;
+                    hr = xa->CreateSourceVoice(&voice, &format, 0, XAUDIO2_DEFAULT_FREQ_RATIO, &callback);
+                    R.add("stereo source voice", hr_text(hr));
+                    if (SUCCEEDED(hr) && voice) {
+                        constexpr size_t frames = 4800;
+                        constexpr double pi = 3.14159265358979323846;
+                        std::vector<int16_t> samples(frames * 2);
+                        for (size_t i = 0; i < frames; ++i) {
+                            const int16_t sample = (int16_t)(std::sin(2.0 * pi * 440.0 * i / 48000.0) * 5000.0);
+                            samples[i * 2] = samples[i * 2 + 1] = sample;
+                        }
+                        XAUDIO2_BUFFER buffer{};
+                        buffer.AudioBytes = (UINT32)(samples.size() * sizeof(samples[0]));
+                        buffer.pAudioData = (const BYTE*)samples.data();
+                        buffer.Flags = XAUDIO2_END_OF_STREAM;
+                        hr = voice->SubmitSourceBuffer(&buffer);
+                        if (SUCCEEDED(hr)) hr = voice->Start();
+                        R.add("source buffer submit/start", hr_text(hr));
+                        if (SUCCEEDED(hr)) {
+                            const DWORD waited = WaitForSingleObject(event, 3000);
+                            R.add("source buffer completion", waited == WAIT_OBJECT_0
+                                                                  ? (FAILED(callback.error) ? "voice error " + hr_text(callback.error)
+                                                                                            : "completed")
+                                                                  : waited == WAIT_TIMEOUT ? "timed out" : "wait failed");
+                        }
+                        voice->Stop();
+                        voice->FlushSourceBuffers();
+                        voice->DestroyVoice();
+                    }
+                    CloseHandle(event);
+                } else {
+                    R.add("source voice event", fmt("failed (%lu)", GetLastError()));
+                }
             }
         }
     }

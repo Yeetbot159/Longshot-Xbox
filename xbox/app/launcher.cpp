@@ -220,7 +220,8 @@ void scan_drives(const std::string& wanted_romfs, const std::string& wanted_exef
         S.scanning = false;
     }
     S.note(romfs < 0 && exefs < 0
-               ? "No ROMFS or ExeFS folders found on the detected storage roots. Connect USB storage and rescan."
+               ? "No game folders found. Expected Longshot\\game\\romfs and "
+                 "Longshot\\game\\ExeFS\\main; press A to rescan."
                : "Found " + std::to_string(romfs_count) + " ROMFS and " + std::to_string(exefs_count) + " ExeFS folder(s).");
 }
 

@@ -90,22 +90,28 @@ int main() {
     touch(drive / "half" / "romfs" / "x.bin", 1);                // (no exefs\main)
     touch(drive / "Longshot" / "work" / "romfs" / "y.bin", 1);   // (the build's own folder is never a game)
     touch(drive / "Longshot" / "work" / "exefs" / "main", 1);
+    touch(drive / "Longshot" / "game" / "romfs" / "c.bin", 250);
+    touch(drive / "Longshot" / "game" / "ExeFS" / "main", 10);
     auto romfs = lx::find_romfs_folders({drive});
-    bool oot = false, copy2 = false, half = false;
+    bool oot = false, copy2 = false, half = false, installed_romfs = false;
     for (const auto& f : romfs) {
         oot |= f.folder == drive / "OoT" / "romfs" && f.bytes == 1000;
         copy2 |= f.folder == drive / "games" / "copy2" / "romfs" && f.bytes == 500;
         half |= f.folder == drive / "half" / "romfs" && f.bytes == 1;
+        installed_romfs |= f.folder == drive / "Longshot" / "game" / "romfs" && f.bytes == 250;
     }
-    CHECK(romfs.size() == 3 && oot && copy2 && half, "ROMFS folders are selected independently, sized, and limited to two levels");
+    CHECK(romfs.size() == 4 && oot && copy2 && half && installed_romfs,
+          "ROMFS folders include Longshot/game without scanning the build work folder");
     const auto exefs = lx::find_exefs_folders({drive, other_drive});
-    bool oot_exefs = false, copy2_exefs = false, separate_exefs = false;
+    bool oot_exefs = false, copy2_exefs = false, separate_exefs = false, installed_exefs = false;
     for (const auto& f : exefs) {
         oot_exefs |= f.folder == drive / "OoT" / "exefs";
         copy2_exefs |= f.folder == drive / "games" / "copy2" / "exefs";
         separate_exefs |= f.folder == other_drive / "only-exefs" / "exefs" && f.drive_root == other_drive;
+        installed_exefs |= f.folder == drive / "Longshot" / "game" / "ExeFS";
     }
-    CHECK(exefs.size() == 3 && oot_exefs && copy2_exefs && separate_exefs, "ExeFS folders require main and can be on another drive");
+    CHECK(exefs.size() == 4 && oot_exefs && copy2_exefs && separate_exefs && installed_exefs,
+          "ExeFS folders include Longshot/game and can be on another drive");
     CHECK(lx::module_path(drive) == drive / "Longshot" / "game" / "longshot_game.dll", "the module's place on the drive");
     fs::remove_all(drive);
     fs::remove_all(other_drive);

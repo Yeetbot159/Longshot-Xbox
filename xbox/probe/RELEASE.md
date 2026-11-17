@@ -8,8 +8,9 @@ UWP game, so that Longshot's Xbox port can be built to fit. It contains nothing 
    `https://<console ip>:11443`), choose **Add**, pick the `.msix` and install. No dependency packages are needed.
 3. In Dev Home, highlight **Longshot Xbox Probe**, press the View button, **View details**, set **App type** to **Game**.
 4. Plug in a USB drive with at least 1 GB free (the probe writes a 512 MB file to `E:\LongshotProbe` to time the drive,
-   then deletes it), start the probe and let it run for about a minute. The last test fills memory until the console refuses, and may close the
-   app: that is expected, and everything before it is saved.
+   then deletes it), start the probe and let it run for about a minute. The audio check plays a brief tone to verify
+   source-voice playback. The last test fills memory until the console refuses, and may close the app: that is expected,
+   and everything before it is saved.
 
 ### Send back the results
 

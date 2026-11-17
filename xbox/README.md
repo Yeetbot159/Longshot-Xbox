@@ -32,8 +32,8 @@ with the controller (D-pad, A):
 | --- | --- |
 | Console | The model, from `GetGamingDeviceModelInformation`, and the memory the console gives the app |
 | Mode | **Auto** (the console's own), **Series S** or **Series X**; written into `longshot_options.ini` in the app's LocalState at once |
-| ROMFS folder | Cycle through detected `romfs\` folders on removable storage; press A to rescan |
-| ExeFS folder | Independently cycle through detected `exefs\` folders containing `main` |
+| ROMFS folder | Cycle through detected `romfs\` folders on removable storage, including `Longshot\game\romfs`; press A to rescan |
+| ExeFS folder | Independently cycle through detected `exefs\` folders containing `main`, including `Longshot\game\ExeFS` |
 | Build | Compiles from the selected folders on-console; estimates the build when its tools are unavailable |
 | Play | Loads `<ROMFS drive>\Longshot\game\longshot_game.dll` and starts the game with the selected ROMFS |
 
