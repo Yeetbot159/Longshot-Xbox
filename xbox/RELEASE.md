@@ -45,6 +45,11 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 - Series S caps renderer shader/pipeline and asynchronous shader-load workers at one; Series X caps each at two to
   reduce transient pressure on shared CPU/GPU memory. This is a concurrency safeguard, not a guarantee that the
   complete renderer fits the app's memory limit.
+- The launcher now caps VMA-managed renderer allocations at half of the expected app-memory limit, up to 2 GB on
+  Series S or 4 GB on Series X; it falls back to 2 GB when the expected limit is unavailable. This is not a total
+  app-memory cap, and imported-pool mirrors have separate limits.
+- The supplied Xbox hookshot artwork now brands the launcher, package assets, website, and compiled game's
+  start-up screen. The previous Longshot image is preserved as an unused original asset.
 
 ## Experimental status and limitations
 
