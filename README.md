@@ -31,6 +31,75 @@ The reported mesh-shader tier is for the current UWP/Dozen path. Microsoft docum
 
 The Xbox profiles cap VMA-managed renderer allocations at up to 2 GB on Series S and 4 GB on Series X, dynamically limited to half of the expected app-memory limit when the platform reports it. Imported-pool mirrors are capped separately at 256 MB and 512 MB. These are renderer allocator limits, not whole-process limits: game/host allocations and non-VMA imports are not included. The Series S profile is based on a measured 5 GB app limit; the Series X 8 GB profile is not yet verified by a probe.
 
+## In-game menu
+
+This upstream Longshot menu reference supplies the choices and defaults shown in the website's graphics guide. The menu code remains authoritative for names, descriptions, order, and restart behavior; the site checks this table against it during build.
+
+| Tab | Option | Choices | Default |
+|---|---|---|---|
+| Graphics | Quality preset | Custom, Minimum (4GB), Low (6GB), Balanced (8GB), High (12GB), Ultra (16GB+), Auto (this PC) | Auto (this PC) on a first start; Custom in an options file from before it |
+| | Aspect ratio | The shapes your screen's resolutions have, narrowest first (5:4, 4:3, 16:10, 16:9, 21:9, 32:9, ...), your monitor's own marked "(monitor's)" (after a restart) | Your monitor's |
+| | Output resolution | The Aspect ratio's sizes: your screen's resolutions and the common ones (1440p, 4K, 5K at 16:9; 1920x1200, 2560x1600 at 16:10; 3440x1440 at 21:9; ...), and 2048x1152 (the game's own reduced size, 80% of its 2560x1440, marked "(reduced)") at 16:9; your screen's own size is marked "(native)" (after a restart) | 2560x1440, the game's own picture, or your screen's size where it is smaller, at its own shape; Auto (this PC) leaves it as it is |
+| | Custom output size | A size of your own, typed as `<width>x<height>` (after a restart) | None |
+| | Profile | Docked, Handheld (after a restart) | Docked; a quality preset sets it |
+| | Upscaler | Game's own, NVIDIA DLSS (only in builds with NVIDIA's DLSS SDK, on NVIDIA RTX GPUs), AMD FSR 3.1 (every build, on GPUs it runs on), AMD FSR 4 (only in builds with FSR 4, on GPUs AMD's files cover), Off (no upscaling). NVIDIA DLAA and AMD FSR 4 Native AA are DLSS's and FSR 4's Native, chosen on the Render resolution row | Game's own; Auto (this PC) chooses DLSS or FSR 4 where they run |
+| | DLSS model | Transformer (K), Transformer 2 (M), Transformer 2 (L), NVIDIA default (shown where DLSS runs; used by DLSS and DLAA) | Transformer (K) |
+| | Render resolution | Auto (the game's own dynamic resolution), 100%, 75%, 67%, 50% (each with its size). With DLSS or FSR 4: Auto, Native, 92%, 83%, 75%, Quality (67%), Balanced (58%), Performance (50%), Ultra Performance (33%). With FSR 3.1: Auto, 100%, then the same as DLSS from 92%. With Off: Auto, 100%, 75%, 67%, 50%, 33% | Auto; a quality preset sets it |
+| | Sharpness | 0 to 100%, in steps of 10 | 0%; a quality preset sets it |
+| | Frame generation | Off, Auto, 2x to 8x | Off |
+| | Frame generation by | Auto (NVIDIA DLSS Frame Generation where it runs: RTX 40 and newer with a temporal upscaler; otherwise the built-in one), Built-in FG. Changes at once | Auto |
+| | Frame pacing | Off, On | Off; a quality preset turns it on |
+| | Game frame rate cap | 60, 90, 120, 144, 165, 240, Uncapped (changes at once) | 60 |
+| | NVIDIA Reflex | Off, On, On + Boost (shown only on NVIDIA GPUs with `VK_NV_low_latency2`) | Off |
+| | AMD Anti-Lag 2 | Off, On (shown only on AMD GPUs with `VK_AMD_anti_lag`) | Off |
+| | Fullscreen | Off, On (the same as <kbd>F11</kbd>) | Off |
+| | V-Sync | Auto, On, Off | Auto |
+| | Window scaling filter | Off, Catmull-Rom, Lanczos | Off; a quality preset sets it |
+| | Ultrawide menus | Full width; Centred, blurred sides; Centred, black bars | Centred, blurred sides |
+| | HDR | Off, Expanded, Native (the game's) | Off |
+| | HDR paper white | 80 to 400 nits, in steps of 10 (while HDR is on) | 200 nits |
+| | HDR peak brightness | 400 to 4000 nits, in steps of 100 (while HDR is on) | 1000 nits |
+| | HDR contrast | 50% to 200% around mid grey, in steps of 5 (while HDR is on) | 100% |
+| | HDR tone mapper | Vanilla (the game's curve), PsychoV35 (RenoDX's; with HDR set to Native. Compatible DLSS/DLAA, FSR 4/native AA and shared-chain FSR 3.1 upscaling run automatically) | Vanilla |
+| | Anisotropic filtering | Game's, 2x, 4x, 8x, 16x | 16x |
+| | GPU device | Auto, or each graphics card by name (after a restart) | Auto |
+| | Threaded rendering | Auto, On, Off (after a restart). Auto is On with 12 or more processor threads for the game | Auto |
+| Audio | Volume | 0 to 100%, in steps of 5 | 100% |
+| | Mute in background | Off, On | Off |
+| | Audio output | Auto, Stereo, 5.1, Mono (layout changes after a restart; Mono/Stereo live on stereo output) | Auto |
+| Gameplay | FPS counter | Off, FPS, Frame time, Graph, Breakdown, Dev | Off |
+| | FPS counter position | Top right, Top left, Bottom right, Bottom left | Top right |
+| | Menu size | Small, Medium, Large | Medium |
+| | Game speed | Per frame, Real time | Real time |
+| | Field of view | 50% to 150%, in steps of 5; applies immediately during gameplay | 100% (original) |
+| | Text speed | Normal, 2x, 4x, Instant | Normal |
+| | Text size | Original, 110%, 125%, 150%, 175% (dialogue, Navi and signs) | Original |
+| | Skip title screen | Off, On (after a restart) | Off |
+| | Microphone | Off, Default, or each microphone by name | Default |
+| | Game language | The game's 16 languages, each by its own name (after a restart) | `language.txt`'s, else English (US) |
+| | Menu language | Auto (the game's language), or one of the supported languages | Auto |
+| | Discord status | Off, On ("Playing Longshot" and the time played in your Discord status, while Discord runs on this PC) | On |
+| | Skip opening | Off, On | Off |
+| | Bug report | Saves a report into a new folder in `bug-reports` | |
+| Controls | Controller in background | Off, On | Off |
+| | Mouse camera | As the stick, Native, Off | As the stick |
+| | Disable camera centering | Off, On | Off |
+| | Mouse sensitivity | 0.10 to 5.00, in steps of 0.10 | 1.00 |
+| | Invert mouse vertical | Off, On | Off |
+| | Invert camera X | Off, On | Off |
+| | Invert camera Y | Off, On | Off |
+| | Camera speed | 50% to 400%, in steps of 25 | 100% |
+| | Stick dead zone | Default (24%), 5%, 10%, 15%, 20%, 30% | Default (24%) |
+| | Rumble strength | Off, 25% to 150%, in steps of 25 | 100% |
+| | Layout preset | Nintendo (Def), Xbox / PC, Swap Face; Custom once you bind a button yourself (on the Controls page) | Nintendo (Def) |
+| | Button prompts | Auto, Switch, Xbox, PlayStation 4, PlayStation 5, Steam Deck, Keyboard (on the Controls page; changes at once where the game allows it, else after a restart) | Auto |
+| | Motion | Opens the Motion page: Motion controls, sensitivity X and Y, invert X and Y, and deadzone | |
+| | Walk mode | Hold, Toggle | Hold |
+| | Walk speed | 15% to 90%, in steps of 5 | 45% |
+| | Controls | Opens the Controls page | |
+| | Menu shortcut | Insert or F1; F1 only; Insert, F1 or Esc | Insert, F1 or Esc |
+| | Compact menu key | Right Shift, Right Ctrl | Right Shift |
+
 ## Releases
 
 Download the game-free app, probe, and public signing certificate from [GitHub Releases](https://github.com/Yeetbot159/Longshot-Xbox/releases). Releases are experimental prereleases. The `xbox-v*` tag workflow builds and publishes:

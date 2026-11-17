@@ -20,6 +20,21 @@ test('archived world-name shorthand stays neutral without changing the specific 
   assert.equal(publicGameText('Hyrulean'), 'Hyrulean');
 });
 
+test('public progress copy neutralizes case variants and compound character and place names', () => {
+  const item = publicProgressItem({
+    title: 'Game: Fence flickers in Phantom Ganon room',
+    originalTitle: "Ganon's Tower; Zora River and zora rivers; Epona; Goron king",
+    summary: 'Young-link-rides-epona RomFS mod',
+    workaround: '',
+    labels: [],
+    id: 'issue:1',
+    url: 'https://example.test/issue/1',
+  });
+  for (const text of [item.title, item.originalTitle, item.summary, ...item.labels]) {
+    assert.doesNotMatch(text, /\b(?:Ganon|Ganondorf|Zora|Epona|Goron)\b/i);
+  }
+});
+
 test('activity exports neutralize title and search copy without altering source records or identifiers', () => {
   const item = { title: 'fix: OoT crashes in Kokiri Forest', originalTitle: 'fix: OoT crashes in Kokiri Forest',
     summary: 'Zelda on Nintendo Switch 2', workaround: 'Try outside Hyrule Field', labels: ['Ocarina of Time', 'Graphics'],

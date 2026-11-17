@@ -50,6 +50,8 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
   app-memory cap, and imported-pool mirrors have separate limits.
 - The supplied Xbox hookshot artwork now brands the launcher, package assets, website, and compiled game's
   start-up screen. The previous Longshot image is preserved as an unused original asset.
+- The website settings guide now builds from the restored menu reference, the site consistently uses the Xbox hookshot
+  logo, and public progress titles neutralize remaining case variants of game-specific names.
 
 ## Experimental status and limitations
 

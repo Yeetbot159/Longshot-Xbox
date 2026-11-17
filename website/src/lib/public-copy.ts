@@ -21,13 +21,17 @@ export function publicGameText(text: string): string {
     .replace(/\bHyrule\b/gi, 'the game world') // Some archived runs use only the world name.
     .replace(/\bKakariko(?: Village)?\b/gi, 'the village')
     .replace(/\bGoron City\b/gi, 'the mountain settlement')
-    .replace(/\bZora['’]s (?:River|Domain|Fountain)\b/gi, 'the water region')
+    .replace(/\bGoron\b/gi, 'the mountain-region character')
+    .replace(/\bZora(?:['’]s)? (?:River|Domain|Fountain)s?\b/gi, 'the water region')
+    .replace(/\bZora\b/gi, 'the water-region character')
+    .replace(/\bPhantom Ganon\b/gi, 'the phantom boss')
     .replace(/\bGanon(?:dorf)?['’]s Castle\b/gi, 'the final castle')
+    .replace(/\bGanon(?:dorf)?\b/gi, 'the final boss')
     .replace(/\bNavi waking Link\b/g, 'the opening wake-up scene')
     .replace(/\bNavi\b/g, 'the companion')
     .replace(/\b(?:adult|young) Link\b/gi, 'the player character')
     .replace(/\bLink['’]s\b/g, 'the player character’s')
-    .replace(/\bEpona\b/g, 'the horse')
+    .replace(/\bEpona\b/gi, 'the horse')
     .replace(/\bTriforce\b/gi, 'the quest relic')
     .replace(/\bocarina\b/gi, 'instrument');
 }
