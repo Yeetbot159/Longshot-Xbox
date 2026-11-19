@@ -643,11 +643,10 @@ bool create_device() {
         return false;
     }
     if (!f12.bufferDeviceAddress) {
-        // A bounded guest-address table still needs implementation. Record the exact Vulkan
-        // indexing and host-import support available on the adapter; Dozen gates nonuniform
-        // descriptor indexing and BDA on shader model 6.6, while fixed arrays may work below it.
+        // Record the prerequisites for the bounded guest-address table; advertised host-import
+        // support alone does not establish that an actual guest allocation can be imported.
         const VkPhysicalDeviceLimits& limits = dev.props.limits;
-        logf("vk: address-table prerequisites (not implemented): fixed storage-buffer array indexing %s, descriptor indexing %s, "
+        logf("vk: address-table prerequisites: fixed storage-buffer array indexing %s, descriptor indexing %s, "
              "nonuniform indexing %s, runtime arrays %s, external-memory-host %s, per-stage storage buffers %u, "
              "descriptor-set storage buffers %u, shader int64 %s",
              f.features.shaderStorageBufferArrayDynamicIndexing ? "yes" : "no",

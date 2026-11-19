@@ -54,6 +54,7 @@ import toolchain as _toolchain
 import disk as _disk
 import object_store as _object_store
 import lift_store as _lift_store
+import build_temp
 # (longshot) RX_TARGET=windows on Linux: the Windows game, with llvm-mingw's Linux release (LONGSHOT_MINGW, or llvm-mingw
 # beside the builder), to run under Proton or copy to a Windows PC
 LINUX, CROSS = not _toolchain.windows(), _toolchain.windows() and os.name != "nt"
@@ -135,6 +136,21 @@ def check_writable(out):
         example = "~/Games/Longshot" if LINUX else r"C:\Games\Longshot"
         fail("The game folder %s can't be written to (%s).%s In Longshot Builder, choose a game folder of your own, for example "
              "%s, and build again." % (out, e.strerror or e, where, example))
+
+
+def xbox_build_temp(work):
+    """Keep temporary files on the selected work drive, including subprocess compiler files."""
+    folder = os.path.join(os.path.abspath(work), "temp")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with build_temp.temporary_directory(prefix="probe-", dir=folder) as probe:
+            with open(os.path.join(probe, "write-check"), "wb") as f:
+                f.write(b"ok")
+    except OSError as e:
+        fail("The build temporary folder %s cannot be used (%s). Check that the selected work drive is writable and try again."
+             % (folder, e))
+    os.environ["TEMP"] = os.environ["TMP"] = folder
+    tempfile.tempdir = folder
 
 
 def fail(text):
@@ -647,7 +663,7 @@ def windows_kits_environment(base):
 
 
 def compile_test(toolchain):
-    with tempfile.TemporaryDirectory() as d:
+    with build_temp.temporary_directory() as d:
         src = os.path.join(d, "t.c")
         with open(src, "w") as f:
             # (_UCRT: the C library of Visual Studio 2015 and later. An older one's stdio.h compiled, and the link failed 40 minutes later
@@ -661,7 +677,7 @@ def compile_test(toolchain):
 def link_test(toolchain):
     """A program links, not only compiles (issue 439: a default library a recent Windows SDK no longer ships stopped the
     build at 99%, after the game had been read and translated)"""
-    with tempfile.TemporaryDirectory() as d:
+    with build_temp.temporary_directory() as d:
         src = os.path.join(d, "t.c")
         with open(src, "w") as f:
             f.write(chr(10).join(("#include <stdio.h>", "int main(void) { return 0; }", "")))
@@ -671,7 +687,7 @@ def link_test(toolchain):
 
 def check_cpp_library(toolchain):
     """Check the renderer's C++20 library features before the long build (issues 39 and 100)."""
-    with tempfile.TemporaryDirectory() as d:
+    with build_temp.temporary_directory() as d:
         src = os.path.join(d, "t.cpp")
         with open(src, "w") as f:
             # Projected find: frontend/maxwell/structured_control_flow.cpp; predicate find and
@@ -725,7 +741,7 @@ def check_linux_prerequisites(work=None):
             missing.append("%s compiler %s (EMSDK/upstream/bin, else ~/emsdk/upstream/bin, then PATH; "
                            "install clang or use the AppImage)" % (name, path))
     if os.path.isfile(cc):
-        with tempfile.TemporaryDirectory() as d:
+        with build_temp.temporary_directory() as d:
             src = os.path.join(d, "t.c")
             with open(src, "w") as f:
                 f.write(chr(10).join(("#include <stdio.h>", "#include <pthread.h>", "int main(void) { return 0; }", "")))
@@ -805,7 +821,7 @@ def check_mingw():
     if not os.path.isfile(cc):   # (LONGSHOT_MINGW set to a folder without the compiler: said here, not as a silent SystemExit)
         fail("The builder's own compiler was not found at %s. Set LONGSHOT_MINGW to an llvm-mingw folder, or unpack the "
              "Longshot Builder zip again into a folder your antivirus allows." % cc)
-    with tempfile.TemporaryDirectory() as d:
+    with build_temp.temporary_directory() as d:
         src = os.path.join(d, "t.c")
         with open(src, "w") as f:
             f.write(chr(10).join(("#include <stdio.h>", "#include <windows.h>", "int main(void) { return 0; }", "")))
@@ -1220,7 +1236,7 @@ def drop_stale_objects(work):
     sys.path.insert(0, os.path.join(ROOT, "third_party", "a64-kit", "tools"))
     import hashlib
     import toolchain
-    with tempfile.TemporaryDirectory() as d:
+    with build_temp.temporary_directory() as d:
         src = os.path.join(d, "t.c")
         with open(src, "w") as f:
             f.write(chr(10).join(("#include <stdio.h>", "#include <stdlib.h>", "#include <windows.h>", "")))
@@ -1518,7 +1534,7 @@ def profile_readable(prof, any_os=False):
         return True
     sys.path.insert(0, os.path.join(ROOT, "third_party", "a64-kit", "tools"))
     import toolchain
-    with tempfile.TemporaryDirectory() as d:
+    with build_temp.temporary_directory() as d:
         src = os.path.join(d, "t.c")
         with open(src, "w") as f:
             f.write("int f(int x) { return x + 1; }" + chr(10))
@@ -2214,7 +2230,10 @@ def main(a=None):
     if a.jobs is not None and a.jobs < 0:
         fail("--jobs must be 1 or more, or 0 for automatic.")
     a.jobs = chosen_jobs(a.jobs)
-    os.makedirs(a.work, exist_ok=True)
+    if XBOX:
+        xbox_build_temp(a.work)
+    else:
+        os.makedirs(a.work, exist_ok=True)
     no_throttle()
     if os.name == "nt":   # (the PC kept awake while this runs: a build is 45 minutes, and sleep stopped it)
         import ctypes

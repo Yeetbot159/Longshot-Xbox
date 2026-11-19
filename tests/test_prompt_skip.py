@@ -46,7 +46,8 @@ class PromptSkipTests(unittest.TestCase):
         self.romfs = self.root / "romfs"
         self.out = self.root / "game" / "prompts"
         self.out.parent.mkdir()
-        self.source_files = [self.here / n for n in ("prompt_assets.py", "prompt_draw.py", "prompt_faces.py", "prompt_keys.py")]
+        self.source_files = [self.here / n for n in ("prompt_assets.py", "prompt_draw.py", "prompt_faces.py", "prompt_keys.py",
+                                                       "build_temp.py")]
         self.source_files.append(self.root / "host" / "prompts.c")   # (the game's side: its runtime files are kept with the set)
         self.game_files = [self.romfs / n for n in (P.FONT, P.prompt_keys.LABEL_FONT, "Pack/ZsDic.pack.zs", P.TEXTURES, P.LAYOUTS,
                                                   "System/Resource/ResourceSizeTable.authored.rsizetable.zs")]
@@ -634,7 +635,7 @@ class PromptDependencyTests(unittest.TestCase):
                 P.prompt_packages()
 
     def test_local_imports_and_environment_are_accounted_for(self):
-        sources = {"prompt_assets", "prompt_draw", "prompt_faces", "prompt_keys"}
+        sources = {"prompt_assets", "prompt_draw", "prompt_faces", "prompt_keys", "build_temp"}
         for name in sources:
             tree = ast.parse((SOURCE / (name + ".py")).read_text(encoding="utf-8"))
             for node in ast.walk(tree):

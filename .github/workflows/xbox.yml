@@ -100,8 +100,10 @@ jobs:
       - name: Launcher and host checks
         shell: pwsh
         run: |
-          python -I -B tests/test_xbox_build.py
-          if ($LASTEXITCODE) { throw 'Xbox build source checks failed' }
+          foreach ($test in 'test_xbox_build.py', 'test_make_game_prepare.py', 'test_make_game_writable.py', 'test_prompt_skip.py') {
+            python -I -B "tests/$test"
+            if ($LASTEXITCODE) { throw "$test failed" }
+          }
           .\xbox\app\test\run.ps1
           if ($LASTEXITCODE) { throw 'launcher checks failed' }
           .\host\uwp\test\run.ps1

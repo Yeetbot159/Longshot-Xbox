@@ -180,7 +180,8 @@ class LanguageTests(unittest.TestCase):
         real = make_game.parse_args
         self.folder_says("ru")
         argv = ["make_game.py", "--game", self.nup, "--prepare", "--out", self.out, "--work", os.path.join(self.dir.name, "work")]
-        with mock.patch.object(sys, "argv", argv), mock.patch.object(make_game, "warn_slow_disk", side_effect=Stop), \
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(make_game, "lock_work"), \
+             mock.patch.object(make_game, "warn_slow_disk", side_effect=Stop), \
              mock.patch.object(make_game, "parse_args", side_effect=lambda: args.append(real()) or args[0]), \
              contextlib.redirect_stdout(io.StringIO()), self.assertRaises(Stop):
             make_game.main()

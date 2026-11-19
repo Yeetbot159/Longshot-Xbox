@@ -25,7 +25,7 @@ The supplied Xbox hookshot artwork is used for launcher and package branding, th
 
 ### Renderer limitation
 
-The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. The renderer now translates guest addresses through a bounded pool and has descriptor-backed task/mesh fallback paths when BDA is unavailable. A PC run with `RX_VK_NO_BDA=1` and `RX_VK_NO_MESH=1` reached Kokiri Forest, but unsupported draws remain and no Series S run has confirmed the same behavior.
+The Series S UWP device reports shader model 6.4. Mesa Dozen exposes Vulkan buffer device addresses only with shader model 6.6 or later, while the current guest shaders use physical storage-buffer pointers. The renderer has bounded guest-address translation and descriptor-backed task/mesh fallback paths when BDA is unavailable, but they depend on host-memory import. A Series S probe (0.2.9.0) returned `0x80070057` for the tested host-memory imports, so those paths are not established on this console. A PC run with `RX_VK_NO_BDA=1` and `RX_VK_NO_MESH=1` reached Kokiri Forest, but unsupported draws remain and no Series S run has confirmed the same behavior.
 
 The reported mesh-shader tier is for the current UWP/Dozen path. Microsoft documents native mesh-shader pipelines on Series X|S devkits through GDK; this UWP measurement does not establish the console silicon's full graphics capabilities.
 

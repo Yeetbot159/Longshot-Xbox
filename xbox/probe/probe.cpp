@@ -338,8 +338,6 @@ void probe_audio_input() {
                 XAUDIO2_VOICE_DETAILS d{};
                 mv->GetVoiceDetails(&d);
                 R.add("output channels / rate", fmt("%u / %u Hz", d.InputChannels, d.InputSampleRate));
-                mv->DestroyVoice();
-
                 HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
                 if (event) {
                     ProbeAudioCallback callback(event);
@@ -377,6 +375,7 @@ void probe_audio_input() {
                 } else {
                     R.add("source voice event", fmt("failed (%lu)", GetLastError()));
                 }
+                mv->DestroyVoice();
             }
         }
     }

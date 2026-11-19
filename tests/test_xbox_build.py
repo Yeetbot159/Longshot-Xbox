@@ -31,6 +31,12 @@ def assigned(name):
 
 
 class XboxBuild(unittest.TestCase):
+    def test_probe_keeps_master_voice_until_source_voice_is_destroyed(self):
+        source = read("xbox", "probe", "probe.cpp")
+        audio = source[source.index("void probe_audio_input()"):source.index("// ---- 5. threads")]
+        self.assertLess(audio.index("CreateMasteringVoice"), audio.index("CreateSourceVoice"))
+        self.assertLess(audio.index("voice->DestroyVoice()"), audio.index("mv->DestroyVoice()"))
+
     def test_xbox_packages_do_not_request_unsupported_broad_filesystem_access(self):
         for manifest in ("xbox", "app", "AppxManifest.xml"), ("xbox", "probe", "AppxManifest.xml"):
             text = read(*manifest)

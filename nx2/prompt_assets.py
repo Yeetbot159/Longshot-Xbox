@@ -43,11 +43,11 @@ import shutil
 import stat
 import struct
 import sys
-import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)   # (python -I leaves the script folder off)
+import build_temp
 from prompt_faces import FACES, override, parts   # noqa: E402 (the faces: their icons, drawings and their parts)
 import prompt_keys   # noqa: E402 (the keyboard face)
 KENNEY = os.path.join(os.path.dirname(HERE), "third_party", "kenney_input")
@@ -1060,7 +1060,7 @@ def prompt_key(a):
     """Everything generate() reads; keep this list with its file opens/imports and tests/test_prompt_skip.py. Also the
     game's side (host/prompts.c makes the runtime files from these, under keys of its own that don't cover its code), and a
     packaged builder's release: each builder update draws them again once, whatever this list misses"""
-    source = {n: prompt_file(os.path.join(HERE, n)) for n in ("prompt_assets.py", "prompt_draw.py")}
+    source = {n: prompt_file(os.path.join(HERE, n)) for n in ("prompt_assets.py", "prompt_draw.py", "build_temp.py")}
     source["host/prompts.c"] = prompt_file(os.path.join(os.path.dirname(HERE), "host", "prompts.c"))
     tables = {n: prompt_file(os.path.join(HERE, n)) for n in ("prompt_faces.py", "prompt_keys.py")}
     fonts = {FONT: prompt_file(os.path.join(a.romfs, FONT))}
@@ -1248,7 +1248,7 @@ def make_prompts(a, incremental=False):
         pass
     out = a.out
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".prompts-", dir=os.path.dirname(os.path.abspath(out))) as temp, prompt_owner(temp, create=True):
+    with build_temp.temporary_directory(prefix=".prompts-", dir=os.path.dirname(os.path.abspath(out))) as temp, prompt_owner(temp, create=True):
         a.out = os.path.join(temp, "new")
         try:
             generate(a)

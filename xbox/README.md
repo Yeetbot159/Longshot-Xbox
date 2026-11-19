@@ -115,7 +115,10 @@ the consoles' Zen 2 (`RX_MARCH=znver2` unless given), emulated thread-locals, `L
 `host/display.c`, and a link against `libwindowsapp.a` alone (plus the C and C++ runtimes, whose DLLs the app
 carries). No renderer is built: the app package has it. The launcher passes the selected ROMFS and ExeFS paths to
 `make_game.py`; output is installed at `<ROMFS drive>\Longshot\game` and intermediate files stay in
-`<ROMFS drive>\Longshot\work`.
+`<ROMFS drive>\Longshot\work`. The Xbox builder uses `<work>\temp` for temporary files and gives its temporary
+directories inherited permissions, rather than Python's Windows 3.13+ mode-0700 ACL, which can exclude the app
+container. Those files can contain game-derived data and inherit the work drive's access permissions; use a trusted
+drive. The reported console access-denied error requires a fresh on-console build to verify this change.
 
     set LONGSHOT_XBOX=1
     set LONGSHOT_MINGW=<llvm-mingw folder>
@@ -154,17 +157,21 @@ is also implemented for adapters with host-memory import, shader int64, and suff
 not been validated on Xbox. These experimental paths do not establish complete rendering. The Series S probe package
 0.2.2 successfully created a shader-model 6.4 pipeline with a bounded,
 non-uniform SRV descriptor array, a promising prerequisite for a UWP-safe address-table path. It does not establish
-that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh fallback works; the updated Device13
-import test still needs to be run on the console.
+that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh fallback works.
 
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
 probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExistingHeapFromAddress` test returned
 `E_INVALIDARG`. The current probe separately records the one-byte result and still attempts
 `ID3D12Device13::OpenExistingHeapFromAddress1` with the full aligned 16 MB allocation, on ordinary and reserved-window
-memory, before checking GPU reads and writes. The attached Series S report came from probe package 0.2.2.0 and did not
-include that newer test; zero-copy import into Dozen remains unverified until the updated probe is run. The renderer now also
-logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing. The renderer source compiles and
-the package includes Mesa Dozen, but no Series S pipeline or frame has been verified.
+memory, before checking GPU reads and writes. A Series S report from probe 0.2.9.0 returned `0x80070057` for both
+sizes and both memory locations; no imported-memory GPU read/write was reached. This leaves the current
+host-import-dependent guest pool and mesh fallbacks unverified, not proof that all possible memory-import techniques fail. The
+renderer logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing. No Series S
+pipeline or frame has been verified.
+
+The same probe reports `0x88960001` when creating a stereo source voice, but its test destroyed the mastering voice
+first. The corrected probe keeps the mastering voice alive; this result does not establish that the launcher audio path
+fails or succeeds, and playback needs a new console test.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,
 `spirv_to_dxil.dll` and `dxil.dll`): 151 of its 162 Windows functions are in the app container's library. The 11

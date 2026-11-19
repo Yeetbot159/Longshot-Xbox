@@ -23,6 +23,9 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- The console builder now uses temporary directories on the selected work drive with inherited permissions to address
+  an Xbox access-denied error. This workaround still needs verification on the console.
+- The probe keeps its XAudio mastering voice alive while testing source playback, correcting the earlier audio check.
 - USB discovery now recognizes the supplied `<drive>\Longshot\game\romfs` and
   `<drive>\Longshot\game\ExeFS\main` layout without scanning the build-work directory.
 - XAudio initialization and reset handling now report failures and wait for queued buffers to drain before freeing a
@@ -55,11 +58,11 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## Experimental status and limitations
 
-The available Series S probe report is from package 0.2.5.0 and is incomplete before the D3D12 results. An earlier
-0.2.2.0 report measured shader model 6.4, D3D12 mesh shader tier 0, and successful creation of a bounded non-uniform
-SRV-array pipeline. Its older `ID3D12Device3::OpenExistingHeapFromAddress` test returned `E_INVALIDARG`; the current
-probe tests a full-size `ID3D12Device13::OpenExistingHeapFromAddress1` import and XAudio source playback, but neither
-result has been collected from the console.
+The Series S probe report from package 0.2.9.0 measured shader model 6.4, D3D12 mesh shader tier 0, and successful
+creation of a bounded non-uniform SRV-array pipeline. Both `ID3D12Device3::OpenExistingHeapFromAddress` and
+`ID3D12Device13::OpenExistingHeapFromAddress1` returned `E_INVALIDARG` for the tested ordinary and guest-window
+allocations. The probe's source-voice failure is inconclusive because that version destroys its mastering voice before
+creating the source voice; the corrected probe needs to be run on the console.
 
 When Vulkan buffer device addresses (BDA) are unavailable, the renderer enters a limited bound-buffer compatibility
 mode. A bounded guest-address table is implemented: it searches up to eight imported pools with statically indexed
@@ -71,9 +74,9 @@ describes this app path, not the console silicon's separate GDK capabilities. Th
 5,120 MB app memory limit and a 4,864 MB CPU commit ceiling. Current upstream Dozen gates BDA and descriptor indexing
 at D3D12 shader model 6.6; the reported 6.4 path supports fixed-size dynamically indexed storage-buffer arrays but not
 nonuniform indexing or runtime descriptor arrays. Dozen storage-buffer array binding and imported-pool access remain
-unverified on console. The available Series S probe report is from package 0.2.5.0 and is incomplete before the D3D12
-results; the newer Device13 import test has not yet been run there. On-console Python/clang building and a Series X
-probe also remain unverified.
+unverified on console. The failed host-import attempts leave the current guest-pool and mesh fallback paths unverified
+on the tested Series S; a successful D3D12 SRV-array pipeline alone does not establish Vulkan or gameplay support. On-console
+Python/clang building and a Series X probe also remain unverified.
 
 The packages contain no game files or data derived from a game. The certificate is public and contains no private
 signing key. After installing, set the app type to **Game** in Dev Home for useful memory measurements.
