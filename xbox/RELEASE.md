@@ -23,6 +23,8 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- Guest-memory imports now select a coherent memory type compatible with both the specific host pointer and Vulkan
+  buffer, check the buffer's required size, and report which import step failed.
 - The console builder now uses temporary directories on the selected work drive with inherited permissions to address
   an Xbox access-denied error. This workaround still needs verification on the console.
 - The probe keeps its XAudio mastering voice alive while testing source playback, correcting the earlier audio check.
@@ -57,6 +59,9 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
   logo, and public progress titles neutralize remaining case variants of game-specific names.
 
 ## Experimental status and limitations
+
+This preview does not include the latest upstream changes; their integration has unresolved renderer and builder
+conflicts and has not been validated.
 
 The Series S probe report from package 0.2.9.0 measured shader model 6.4, D3D12 mesh shader tier 0, and successful
 creation of a bounded non-uniform SRV-array pipeline. Both `ID3D12Device3::OpenExistingHeapFromAddress` and
