@@ -169,6 +169,10 @@ host-import-dependent guest pool and mesh fallbacks unverified, not proof that a
 renderer logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing. No Series S
 pipeline or frame has been verified.
 
+For each imported pool, the renderer checks the pointer's Vulkan memory types against the buffer's requirements and
+selects only host-visible, coherent memory. It reports the failing import step rather than reusing a type chosen for a
+different pointer. This avoids invalid imports but does not replace host import with a copy-backed memory path.
+
 The same probe reports `0x88960001` when creating a stereo source voice, but its test destroyed the mastering voice
 first. The corrected probe keeps the mastering voice alive; this result does not establish that the launcher audio path
 fails or succeeds, and playback needs a new console test.

@@ -30,6 +30,7 @@
 #include "vk_internal.h"
 #include "vk_texture.h"   // (upload_command_buffer)
 #include "vk_gprof.h"      // (RX_VK_PASS_TIMING)
+#include "host_import_type.h"
 #include "import_hold.h"
 #include "mirror_budget.h"   // (mirror_budget's rule, by the card)
 #include "mirror_trim.h"
@@ -170,6 +171,18 @@ bool import_on_hold(uint64_t lo, uint64_t hi) {
 void import_remember_failure(uint64_t lo, uint64_t hi) {
     std::lock_guard lk(import_holds_mu);
     import_holds.deny_for(lo, hi, import_now_ms());
+}
+void host_import_failed(uint64_t lo, uint64_t hi, const char* stage, VkResult result = VK_SUCCESS) {
+    import_result = result;
+    import_remember_failure(lo, hi);
+    static std::atomic<unsigned> logged{0};
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+        if (result == VK_SUCCESS)
+            logf("vk: host import %#llx..%#llx failed: %s", (unsigned long long)lo, (unsigned long long)hi, stage);
+        else
+            logf("vk: host import %#llx..%#llx failed at %s (VkResult %d)", (unsigned long long)lo,
+                 (unsigned long long)hi, stage, (int)result);
+    }
 }
 
 constexpr VkBufferUsageFlags kBaseUsage =
@@ -438,24 +451,12 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
         return true;
     }
 #endif
-    // (the host allocations' memory type: the same for every pointer, asked once)
-    static uint32_t type = UINT32_MAX;
-    if (type == UINT32_MAX) {
-        VkMemoryHostPointerPropertiesEXT hp{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-        if (vkGetMemoryHostPointerPropertiesEXT(dev.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, ptr,
-                                                &hp) != VK_SUCCESS) {
-            import_remember_failure(lo, hi);
-            return false;
-        }
-        for (uint32_t i = 0; i < dev.memory.memoryTypeCount && type == UINT32_MAX; i++)   // (host visible, coherent)
-            if ((hp.memoryTypeBits >> i & 1) &&
-                (dev.memory.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
-                    (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
-                type = i;
-        if (type == UINT32_MAX) {
-            import_remember_failure(lo, hi);
-            return false;
-        }
+    VkMemoryHostPointerPropertiesEXT hp{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    const VkResult properties = vkGetMemoryHostPointerPropertiesEXT(
+        dev.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT, ptr, &hp);
+    if (properties != VK_SUCCESS) {
+        host_import_failed(lo, hi, "vkGetMemoryHostPointerPropertiesEXT", properties);
+        return false;
     }
     t1 = clk::now();
     VkExternalMemoryBufferCreateInfo eb{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
@@ -464,8 +465,21 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     bi.pNext = &eb;
     bi.size = bytes;
     bi.usage = guest_buffer_usage();
-    if (vkCreateBuffer(dev.device, &bi, nullptr, &p.buffer) != VK_SUCCESS) {
-        import_remember_failure(lo, hi);
+    const VkResult created = vkCreateBuffer(dev.device, &bi, nullptr, &p.buffer);
+    if (created != VK_SUCCESS) {
+        p.buffer = VK_NULL_HANDLE;
+        host_import_failed(lo, hi, "vkCreateBuffer", created);
+        return false;
+    }
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(dev.device, p.buffer, &req);
+    const uint32_t type = host_import::coherent_type(hp.memoryTypeBits, req.memoryTypeBits, dev.memory,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (req.size > bytes || type == UINT32_MAX) {
+        destroy_import_buffer(p.buffer);
+        p.buffer = VK_NULL_HANDLE;
+        host_import_failed(lo, hi, req.size > bytes ? "buffer memory requirement exceeds guest range" :
+                           "no compatible host-visible coherent memory type");
         return false;
     }
     t2 = clk::now();
@@ -483,11 +497,10 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     t3 = clk::now();
     const VkResult bound = allocated == VK_SUCCESS ? vkBindBufferMemory(dev.device, p.buffer, p.memory, 0) : allocated;
     if (bound != VK_SUCCESS) {
-        import_result = bound;
         destroy_import_buffer(p.buffer);
         if (allocated == VK_SUCCESS) vkFreeMemory(dev.device, p.memory, nullptr);
         p.buffer = VK_NULL_HANDLE, p.memory = VK_NULL_HANDLE;
-        import_remember_failure(lo, hi);
+        host_import_failed(lo, hi, allocated == VK_SUCCESS ? "vkBindBufferMemory" : "vkAllocateMemory", bound);
         return false;
     }
     VkBufferDeviceAddressInfo da{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};

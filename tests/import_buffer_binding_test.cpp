@@ -1,6 +1,7 @@
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -12,8 +13,10 @@
 #include <string>
 #include <vector>
 #include "import_hold.h"
+#include "host_import_type.h"
 
 namespace fixture {
+namespace host_import = mkwvk::host_import;
 template<class T> T handle(uintptr_t n) { return reinterpret_cast<T>(n); }
 enum { HostMemory, DmaMemory, EveryMemory };
 enum class Fault { None, Create, Allocate, HostOOM, DeviceOOM, Unknown, Properties };
@@ -24,8 +27,9 @@ struct Pool {
     VkBuffer buffer{}; VkDeviceMemory memory{}; VkDeviceAddress address = 0;
     std::vector<VkDeviceMemory> pieces;
 };
-struct { VkDevice device{}; VkPhysicalDeviceMemoryProperties memory{}; bool dma_buf_import = true, sparse_buffers = true; VkDriverId driver_id{}; } dev;
-struct Host { uint8_t* guest_base() { static uint8_t bytes[4096]{}; return bytes; } } host_value;
+struct { VkDevice device{}; VkPhysicalDeviceMemoryProperties memory{}; bool dma_buf_import = true, sparse_buffers = true;
+         VkDriverId driver_id{}; struct { bool bufferDeviceAddress = true; } vk12; } dev;
+struct Host { uint8_t* guest_base() { static uint8_t bytes[8192]{}; return bytes; } } host_value;
 Host* host = &host_value;
 uint64_t max_import_size = UINT64_MAX;
 bool import_cooling = false;
@@ -37,12 +41,16 @@ int64_t import_now_ms() { return now_ms; }
 unsigned creates = 0, allocations = 0, binds = 0, address_queries = 0, destroyed_buffers = 0, freed_memory = 0;
 unsigned sparse_calls = 0;
 unsigned owner_releases = 0;
+unsigned property_queries = 0;
+uint32_t host_types = 1, buffer_types = 1, allocated_type = UINT32_MAX;
+VkDeviceSize required_size = 4096;
 uintptr_t next_id = 1;
 std::map<VkBuffer, int> buffers;
 std::set<VkBuffer> bound_buffers;
 std::set<VkDeviceMemory> memories;
 std::vector<char> release_order;
 constexpr VkBufferUsageFlags kUsage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+VkBufferUsageFlags guest_buffer_usage() { return dev.vk12.bufferDeviceAddress ? kUsage : 0; }
 bool failing(Fault f, int kind) { return fault == f && (fail_kind == EveryMemory || fail_kind == kind); }
 void logf(const char*, ...) {}
 const char* getenv(const char*) { return nullptr; }
@@ -53,8 +61,9 @@ struct MEMORY_BASIC_INFORMATION { uint8_t* BaseAddress; size_t RegionSize; int S
 void* VirtualAlloc(void* p, size_t, int, int) { return p; }
 size_t VirtualQuery(void*, MEMORY_BASIC_INFORMATION*, size_t) { return 0; }
 VkResult vkGetMemoryHostPointerPropertiesEXT(VkDevice, VkExternalMemoryHandleTypeFlagBits, const void*, VkMemoryHostPointerPropertiesEXT* hp) {
+    property_queries++;
     if (fault == Fault::Properties) return VK_ERROR_OUT_OF_HOST_MEMORY;
-    hp->memoryTypeBits = 1; return VK_SUCCESS;
+    hp->memoryTypeBits = host_types; return VK_SUCCESS;
 }
 VkResult vkCreateBuffer(VkDevice, const VkBufferCreateInfo* ci, const VkAllocationCallbacks*, VkBuffer* out) {
     creates++;
@@ -64,9 +73,14 @@ VkResult vkCreateBuffer(VkDevice, const VkBufferCreateInfo* ci, const VkAllocati
     if (failing(Fault::Create, allocation_kind)) return VK_ERROR_OUT_OF_DEVICE_MEMORY;
     *out = handle<VkBuffer>(next_id++); buffers.emplace(*out, allocation_kind); return VK_SUCCESS;
 }
-VkResult vkAllocateMemory(VkDevice, const VkMemoryAllocateInfo*, const VkAllocationCallbacks*, VkDeviceMemory* out) {
+void vkGetBufferMemoryRequirements(VkDevice, VkBuffer b, VkMemoryRequirements* req) {
+    assert(buffers.count(b));
+    *req = {required_size, 4096, buffer_types};
+}
+VkResult vkAllocateMemory(VkDevice, const VkMemoryAllocateInfo* ai, const VkAllocationCallbacks*, VkDeviceMemory* out) {
     allocations++; *out = handle<VkDeviceMemory>(0xbeef);
     if (failing(Fault::Allocate, allocation_kind)) return VK_ERROR_OUT_OF_HOST_MEMORY;
+    if (ai) allocated_type = ai->memoryTypeIndex;
     *out = handle<VkDeviceMemory>(next_id++); memories.insert(*out); return VK_SUCCESS;
 }
 VkResult vkBindBufferMemory(VkDevice, VkBuffer b, VkDeviceMemory m, VkDeviceSize offset) {
@@ -80,6 +94,11 @@ VkResult vkBindBufferMemory(VkDevice, VkBuffer b, VkDeviceMemory m, VkDeviceSize
 VkDeviceAddress vkGetBufferDeviceAddress(VkDevice, const VkBufferDeviceAddressInfo* ci) {
     assert(bound_buffers.count(ci->buffer));   // (never query an unbound buffer, including an ignored failed bind)
     address_queries++; return 0x100000;
+}
+VkDeviceAddress queried_buffer_address(VkBuffer buffer) {
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(dev.device, &info);
 }
 void vkDestroyBuffer(VkDevice, VkBuffer b, const VkAllocationCallbacks*) {
     assert(buffers.erase(b) == 1); bound_buffers.erase(b); destroyed_buffers++; release_order.push_back('B');
@@ -136,6 +155,16 @@ void run(const std::string& route, const std::string& test) {
     if (test == "device-oom" || test == "dma-bind-fallback" || test == "both-bind-fail" || test == "hold-retry") fault = Fault::DeviceOOM;
     if (test == "unknown-bind") fault = Fault::Unknown;
     if (test == "properties-error") fault = Fault::Properties;
+    if (test == "buffer-type-mismatch") buffer_types = 2;
+    if (test == "host-type-mismatch") host_types = 2;
+    if (test == "coherent-mismatch") dev.memory.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    if (test == "too-small-range") required_size = 8192;
+    if (test == "no-bda") dev.vk12.bufferDeviceAddress = false;
+    if (test == "highest-memory-type") {
+        dev.memory.memoryTypeCount = 32;
+        dev.memory.memoryTypes[31].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        host_types = buffer_types = 0x80000000u;
+    }
     if (route == "pool" && test != "both-bind-fail") fail_kind = DmaMemory;
     Pool p;
     if (test == "nvidia") {   // (NVIDIA's driver refuses the window's dma-bufs: no udmabuf opened, no dma-buf tried, host pointers)
@@ -150,10 +179,28 @@ void run(const std::string& route, const std::string& test) {
         assert(call(route, p, 128ull << 20)); assert(sparse_calls == 1 && binds == 0 && address_queries == 1);
         release(p); return;
     }
+    if (test == "per-pointer-query") {
+        dev.memory.memoryTypeCount = 2;
+        dev.memory.memoryTypes[1].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        buffer_types = 3;
+        assert(import_pool(0, 4096, p) && allocated_type == 0);
+        release(p);
+        host_types = 2;
+        Pool second;
+        assert(import_pool(4096, 8192, second) && allocated_type == 1 && property_queries == 2);
+        release(second);
+        return;
+    }
     const bool success = call(route, p);
     assert(owner_releases == destroyed_buffers);   // Every factory rollback preserves main's owner hook.
-    if (test == "healthy" || (route == "pool" && test != "both-bind-fail")) {
+    if (test == "no-bda") {
+        assert(success && p.buffer && p.memory && !p.address && address_queries == 0);
+        release(p);
+        return;
+    }
+    if (test == "healthy" || test == "highest-memory-type" || (route == "pool" && test != "both-bind-fail")) {
         assert(success && p.buffer && p.memory && p.address && address_queries == 1);
+        if (test == "highest-memory-type") assert(allocated_type == 31);
         assert(buffers.size() == 1 && memories.size() == 1 && import_holds.rows.empty());
         if (route == "pool") {
             assert(creates == 2 && buffers.at(p.buffer) == HostMemory);
@@ -165,6 +212,13 @@ void run(const std::string& route, const std::string& test) {
     assert(!success && address_queries == 0); empty();
     if (test == "create-error" || test == "properties-error") {
         assert(destroyed_buffers == 0 && freed_memory == 0 && binds == 0);
+        if (route == "host") {
+            assert(!p.buffer);
+            assert(import_result == (test == "properties-error" ? VK_ERROR_OUT_OF_HOST_MEMORY : VK_ERROR_OUT_OF_DEVICE_MEMORY));
+        }
+    } else if (test == "buffer-type-mismatch" || test == "host-type-mismatch" || test == "coherent-mismatch" ||
+               test == "too-small-range") {
+        assert(destroyed_buffers == 1 && freed_memory == 0 && allocations == 0 && binds == 0 && !p.buffer);
     } else if (test == "allocate-error") {
         assert(destroyed_buffers == 1 && freed_memory == 0 && binds == 0);
     } else {
@@ -176,7 +230,9 @@ void run(const std::string& route, const std::string& test) {
     }
     if (route != "dma") {
         assert(import_holds.rows.size() == 1);
-        unsigned prior = creates; fault = Fault::None; assert(!call(route, p) && import_cooling && creates == prior);
+        unsigned prior = creates; fault = Fault::None; host_types = buffer_types = 1; required_size = 4096;
+        dev.memory.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        assert(!call(route, p) && import_cooling && creates == prior);
         now_ms += mkwvk::ImportHolds::kGapMs; assert(call(route, p) && !import_cooling);
         assert(import_holds.rows.empty()); release(p);
     } else assert(import_holds.rows.empty());   // (a DMA failure must not suppress host fallback)

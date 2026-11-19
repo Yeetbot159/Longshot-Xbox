@@ -104,6 +104,12 @@ jobs:
             python -I -B "tests/$test"
             if ($LASTEXITCODE) { throw "$test failed" }
           }
+          $cxx = Join-Path $env:LONGSHOT_MINGW 'bin\clang++.exe'
+          $env:PATH = "$(Join-Path $env:LONGSHOT_MINGW 'bin');$(Join-Path $env:LONGSHOT_MINGW 'x86_64-w64-mingw32\bin');$env:PATH"
+          python -I -B tests/test_import_buffer_binding.py --cxx $cxx --headers (Join-Path $env:RX_CPM 'vulkanheaders\v1.4.345\include')
+          if ($LASTEXITCODE) { throw 'guest import checks failed' }
+          python -I -B tests/test_vma_memory_limit.py --cxx $cxx
+          if ($LASTEXITCODE) { throw 'renderer memory boundary checks failed' }
           .\xbox\app\test\run.ps1
           if ($LASTEXITCODE) { throw 'launcher checks failed' }
           .\host\uwp\test\run.ps1
