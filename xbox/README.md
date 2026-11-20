@@ -119,6 +119,10 @@ carries). No renderer is built: the app package has it. The launcher passes the 
 directories inherited permissions, rather than Python's Windows 3.13+ mode-0700 ACL, which can exclude the app
 container. Those files can contain game-derived data and inherit the work drive's access permissions; use a trusted
 drive. The reported console access-denied error requires a fresh on-console build to verify this change.
+Builder output is saved to `build-console.log` in the app's LocalState, accessible through Xbox Device Portal's app
+data files. It may contain local paths and game-derived information. The launcher wraps recent activity; consult the
+log if a long error is still cut off. Xbox child scripts use absolute package paths rather than relying on their
+working directory; this change still needs console verification.
 
     set LONGSHOT_XBOX=1
     set LONGSHOT_MINGW=<llvm-mingw folder>

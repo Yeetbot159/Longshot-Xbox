@@ -410,6 +410,9 @@ def run(cmd, env=None, on_line=None, check=True, output=None, show=None, cwd=ROO
     """A step, its output printed as it comes. show: what of each line is printed (its None: nothing; on_line and a failure's
     reason still get the line itself). base: the environment it starts from (os.environ). silence: seconds without a line after
     which the step is stopped; it returns None then (with check, the build fails). allow: exit statuses returned, not failed"""
+    if XBOX and cmd[:len(PY)] == PY and len(cmd) > len(PY) and cmd[len(PY)].startswith("nx2/"):
+        cmd = list(cmd)
+        cmd[len(PY)] = os.path.join(HERE, cmd[len(PY)][len("nx2/"):])
     e = dict(os.environ if base is None else base, PYTHONIOENCODING="utf-8")
     e.update(env or {})
     p = subprocess.Popen(cmd, cwd=cwd, env=e, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",

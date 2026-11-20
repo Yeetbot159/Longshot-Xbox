@@ -76,6 +76,29 @@ class Writable(unittest.TestCase):
 
 
 class XboxTemporaryFiles(unittest.TestCase):
+    def test_child_script_in_package_path_with_spaces(self):
+        with tempfile.TemporaryDirectory(prefix="xbox package ") as folder:
+            scripts = Path(folder) / "tools" / "nx2"
+            scripts.mkdir(parents=True)
+            (scripts / "unpack.py").write_text("import sys\nprint('argument:', sys.argv[1])\n", encoding="utf-8")
+            output = io.StringIO()
+            with mock.patch.object(make_game, "XBOX", True), mock.patch.object(make_game, "HERE", str(scripts)), \
+                    contextlib.redirect_stdout(output):
+                result = make_game.run(make_game.PY + ["nx2/unpack.py", "game files"], cwd=folder)
+            self.assertEqual(result, 0)
+            self.assertIn("argument: game files", output.getvalue())
+
+    def test_packaged_unpack_uses_absolute_script_path_from_another_directory(self):
+        with tempfile.TemporaryDirectory(prefix="xbox build ") as folder:
+            exefs = Path(folder) / "game files"
+            exefs.mkdir()
+            (exefs / "main").write_bytes(b"NSO0" + b"\0" * 252)
+            output = io.StringIO()
+            with mock.patch.object(make_game, "XBOX", True), contextlib.redirect_stdout(output):
+                result = make_game.run(make_game.PY + ["nx2/unpack.py", str(exefs)], cwd=folder)
+            self.assertEqual(result, 0)
+            self.assertIn("not ZBIC, kept", output.getvalue())
+
     def test_workspace_temp_is_writable_and_inherited_by_isolated_children(self):
         with tempfile.TemporaryDirectory() as work, mock.patch.dict(os.environ, {"LONGSHOT_XBOX": "1"}), \
                 mock.patch.object(tempfile, "tempdir", tempfile.tempdir):

@@ -23,6 +23,9 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- The console builder starts its Python scripts by absolute path and saves full output in the app's
+  `LocalState\build-console.log`; recent activity wraps on screen. The reported `unpack.py` failure's full
+  cause was not visible, so this still needs verification on Xbox.
 - Guest-memory imports now select a coherent memory type compatible with both the specific host pointer and Vulkan
   buffer, check the buffer's required size, and report which import step failed.
 - The console builder now uses temporary directories on the selected work drive with inherited permissions to address

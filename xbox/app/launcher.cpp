@@ -310,27 +310,42 @@ void run_or_measure_build() {
         }
         CloseHandle(w_pipe);
 
-        std::string line_buf;
+        const fs::path log_path = local_folder / "build-console.log";
+        std::ofstream build_log(log_path, std::ios::binary | std::ios::trunc);
+        const bool logging = bool(build_log);
+        if (!logging) S.note("Could not save build output to LocalState\\build-console.log.");
+        std::string line_buf, last_line;
+        bool reported_error = false;
+        auto process_line = [&] {
+            if (line_buf.empty()) return;
+            last_line = line_buf;
+            if (line_buf.rfind("@@stage", 0) == 0 || line_buf.rfind("@@plan", 0) == 0 ||
+                line_buf.rfind("@@error", 0) == 0 || line_buf.rfind("@@done", 0) == 0) {
+                if (line_buf.rfind("@@error", 0) == 0) reported_error = true;
+                S.note(line_buf);
+            } else if (line_buf.rfind("@@file", 0) == 0) {
+                S.note("  " + line_buf.substr(7));
+            }
+            line_buf.clear();
+        };
         char buf[256];
         DWORD read_bytes = 0;
         while (ReadFile(r_pipe, buf, sizeof buf, &read_bytes, nullptr) && read_bytes > 0) {
+            if (build_log) build_log.write(buf, read_bytes);
             for (DWORD i = 0; i < read_bytes; ++i) {
                 if (buf[i] == '\n' || buf[i] == '\r') {
-                    if (!line_buf.empty()) {
-                        if (line_buf.rfind("@@stage", 0) == 0 || line_buf.rfind("@@plan", 0) == 0 ||
-                            line_buf.rfind("@@error", 0) == 0 || line_buf.rfind("@@done", 0) == 0) {
-                            S.note(line_buf);
-                        } else if (line_buf.rfind("@@file", 0) == 0) {
-                            S.note("  " + line_buf.substr(7));
-                        }
-                        line_buf.clear();
-                    }
+                    process_line();
                 } else {
                     line_buf.push_back(buf[i]);
                 }
             }
         }
+        process_line();
         CloseHandle(r_pipe);
+        if (logging) {
+            build_log.flush();
+            if (!build_log) S.note("Could not finish saving LocalState\\build-console.log.");
+        }
         WaitForSingleObject(pi.hProcess, INFINITE);
         DWORD exit_code = 0;
         GetExitCodeProcess(pi.hProcess, &exit_code);
@@ -340,7 +355,9 @@ void run_or_measure_build() {
         if (exit_code == 0) {
             S.note("Build complete! longshot_game.dll ready. Press A on Play to start.");
         } else {
-            S.note("Build finished with exit code " + std::to_string(exit_code) + ".");
+            if (!reported_error && !last_line.empty()) S.note("Builder: " + last_line);
+            S.note("Build failed (" + std::to_string(exit_code) + ")." +
+                   (logging && build_log ? " Full output: LocalState\\build-console.log" : " Build log unavailable."));
         }
         return finish();
     }
@@ -655,6 +672,9 @@ private:
                               22.0f, L"en-us", text_.put());
         dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
                               17.0f, L"en-us", small_.put());
+        dw_->CreateTextFormat(L"Segoe UI", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                              17.0f, L"en-us", status_text_.put());
+        if (status_text_) status_text_->SetWordWrapping(DWRITE_WORD_WRAPPING_CHARACTER);
         ctx_->CreateSolidColorBrush({0.91f, 0.95f, 0.91f, 1}, fg_.put());
         ctx_->CreateSolidColorBrush({0.59f, 0.68f, 0.61f, 1}, dim_.put());
         ctx_->CreateSolidColorBrush({0.81f, 0.69f, 0.43f, 1}, accent_.put());
@@ -784,10 +804,14 @@ private:
         ctx_->FillRoundedRectangle(
             D2D1_ROUNDED_RECT{D2D1_RECT_F{margin, status_y, width_ - margin, status_y + status_h}, radius, radius}, panel_.get());
         text("ACTIVITY", small_.get(), accent_.get(), margin + 24 * scale, status_y + 16 * scale, 190 * scale, 24 * scale);
-        const size_t first = notes.size() > 3 ? notes.size() - 3 : 0;
-        float note_y = status_y + 45 * scale;
-        for (size_t i = first; i < notes.size(); ++i, note_y += 27 * scale)
-            text(notes[i], small_.get(), fg_.get(), margin + 24 * scale, note_y, width_ - 2 * margin - 48 * scale, 24 * scale);
+        const size_t first = notes.size() > 2 ? notes.size() - 2 : 0;
+        std::string activity;
+        for (size_t i = first; i < notes.size(); ++i) {
+            if (!activity.empty()) activity += '\n';
+            activity += notes[i];
+        }
+        text(activity, status_text_ ? status_text_.get() : small_.get(), fg_.get(), margin + 24 * scale,
+             status_y + 45 * scale, width_ - 2 * margin - 48 * scale, status_h - 48 * scale);
         text("D-pad  Navigate     Left / Right  Change     A  Select / rescan", small_.get(), dim_.get(), margin,
              height_ - 38 * scale, width_ - 2 * margin, 24 * scale);
         ctx_->EndDraw();
@@ -802,7 +826,7 @@ private:
     com_ptr<ID2D1Bitmap1> target_;
     com_ptr<ID2D1Bitmap> logo_;
     com_ptr<IDWriteFactory> dw_;
-    com_ptr<IDWriteTextFormat> title_, text_, small_;
+    com_ptr<IDWriteTextFormat> title_, text_, small_, status_text_;
     com_ptr<ID2D1SolidColorBrush> fg_, dim_, accent_, panel_, tile_, selected_, edge_;
     float width_ = 1920, height_ = 1080;
     int row_ = kRomfs;
