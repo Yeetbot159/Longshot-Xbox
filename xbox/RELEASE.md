@@ -23,6 +23,9 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- The launcher directs the game and renderer to the built game folder for caches and logs while keeping the selected
+  ROMFS as the asset source. The host-side correction requires rebuilding the game module; Xbox play is unverified.
+- The package requests UTF-8 for narrow file paths and warns if the system does not enable it; console behavior is unverified.
 - The console builder package now includes the GPU headers needed for compilation and prebuilds its translator and ZBIC
   helper DLLs rather than writing them into the read-only installation. Windows package checks exercise these files;
   loading the helpers and completing a build on Xbox remain unverified.

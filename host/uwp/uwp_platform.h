@@ -78,7 +78,7 @@ typedef struct LongshotUwpPlatform {
 
     /* ---- files, UTF-8 ---- */
     const char *local_folder;   /* the app's LocalState: options, saves, caches */
-    const char *game_folder;    /* the parent of the selected ROMFS folder, on its drive */
+    const char *game_folder;    /* the built game folder, separate from the selected ROMFS */
     const char *work_folder;    /* <drive>\Longshot\work */
 
     /* ---- the console ---- */

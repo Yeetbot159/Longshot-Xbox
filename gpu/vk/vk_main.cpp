@@ -1647,6 +1647,12 @@ const MkwVkRenderer* mkwvk_init(const MkwVkHost* h) {
         return nullptr;
     }
     host = h;
+#ifdef LONGSHOT_UWP
+    if (game_folder_path().empty()) {
+        logf("vk: Xbox game folder is missing or too long; start the game from the launcher");
+        return nullptr;
+    }
+#endif
     if (!load_global()) {
 #ifdef _WIN32
         logf("vk: load_global failed (Vulkan loader library or vkCreateInstance missing)");

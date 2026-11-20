@@ -7,6 +7,9 @@
 
 #include "../game_files.h"
 #include "../profiles.h"
+#define LONGSHOT_UWP 1
+#include "../../../gpu/vk/vk_paths.h"
+#undef LONGSHOT_UWP
 
 namespace fs = std::filesystem;
 namespace lx = longshot_xbox;
@@ -121,6 +124,14 @@ int main() {
     CHECK(exefs.size() == 4 && oot_exefs && copy2_exefs && separate_exefs && installed_exefs,
           "ExeFS folders include Longshot/game and can be on another drive");
     CHECK(lx::module_path(drive) == drive / "Longshot" / "game" / "longshot_game.dll", "the module's place on the drive");
+    CHECK(SetEnvironmentVariableW(L"LONGSHOT_XBOX_GAME_DIR", L"E:\\Longshot\\g\u00e4me"), "set renderer game folder");
+    CHECK(mkwvk::game_folder_path() == "E:\\Longshot\\g\xc3\xa4me\\", "renderer uses the built game folder as UTF-8");
+    char short_path[4];
+    CHECK(mkwvk::game_module_path(short_path, sizeof short_path) == sizeof short_path, "renderer rejects a short path buffer");
+    CHECK(SetEnvironmentVariableW(L"LONGSHOT_XBOX_GAME_DIR", L"E:\\Longshot\\game\\") &&
+              mkwvk::game_folder_path() == "E:\\Longshot\\game\\", "renderer accepts a trailing separator");
+    CHECK(SetEnvironmentVariableW(L"LONGSHOT_XBOX_GAME_DIR", nullptr) && mkwvk::game_folder_path().empty(),
+          "renderer rejects a missing game folder");
     fs::remove_all(drive);
     fs::remove_all(other_drive);
 

@@ -56,7 +56,11 @@ The launcher package now carries CPython, its build dependencies, and llvm-mingw
 `nx2/make_game.py` pipeline on the console. Its translator and ZBIC helper DLLs are built during packaging so the
 builder does not need to write them into the read-only installation. Loading them on Xbox remains unverified.
 ROMFS and ExeFS can be chosen independently; the build work and resulting
-module stay on the selected ROMFS drive under `Longshot\work` and `Longshot\game`. The Series S probe measured a
+module stay on the selected ROMFS drive under `Longshot\work` and `Longshot\game`. During play, the selected ROMFS
+remains the game's asset source; game-folder caches and logs use `Longshot\game`, not the installed app directory.
+The host path correction requires rebuilding the game module with the updated tools.
+The package requests UTF-8 as the process code page for paths containing non-ASCII characters; this needs console verification.
+The Series S probe measured a
 5,120 MB app memory limit, a 4,864 MB commit ceiling, executable generated code, and successful creation of a child
 copy of the probe. The builder uses one compile job with a 3 GB compiler budget. The probe did not
 try to start Python or clang, and a complete builder run has not yet succeeded on the console; package-process restrictions,

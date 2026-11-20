@@ -2,7 +2,8 @@
    On Windows the game is bin\longshot.exe since the launcher came: longshot.exe in the folder is its launcher (the builder's
    setup, builder/setup/setup.c, which starts bin\longshot.exe), the game and its DLLs are in bin\, the game's files stay in the folder. hos_game_path_a/_w answer as
    GetModuleFileName(NULL, ...) does, but with the folder's path when the exe is in a "bin" folder beside image.bin, so code that
-   strips the exe's name and adds a file's finds the folder's file. Modules (DLLs) are still loaded from beside the exe itself. */
+   strips the exe's name and adds a file's finds the folder's file. Modules (DLLs) are still loaded from beside the exe itself.
+   On Xbox the app supplies the built game folder; the executable itself is in the read-only app package. */
 #pragma once
 #include <string.h>
 #include <wchar.h>
@@ -15,6 +16,44 @@
 #endif
 #include <windows.h>
 
+#ifdef LONGSHOT_UWP
+#include "uwp/uwp_platform.h"
+
+static inline DWORD hos_game_path_a(char *buf, DWORD size) {
+    const char *dir = hos_uwp ? hos_uwp->game_folder : NULL;
+    if (!dir || !*dir) { SetLastError(ERROR_PATH_NOT_FOUND); return 0; }
+    const size_t n = strlen(dir);
+    const int sep = dir[n - 1] != '\\' && dir[n - 1] != '/';
+    const char name[] = "longshot_game.dll";
+    if (n + (size_t)sep + sizeof name > size) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return size;
+    }
+    memcpy(buf, dir, n);
+    if (sep) buf[n] = '\\';
+    memcpy(buf + n + sep, name, sizeof name);
+    return (DWORD)(n + sep + sizeof name - 1);
+}
+
+static inline DWORD hos_game_path_w(wchar_t *buf, DWORD size) {
+    const char *dir = hos_uwp ? hos_uwp->game_folder : NULL;
+    if (!dir || !*dir) { SetLastError(ERROR_PATH_NOT_FOUND); return 0; }
+    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, dir, -1, NULL, 0);
+    if (!count) return 0;
+    const size_t n = (size_t)count - 1;
+    const size_t bytes = strlen(dir);
+    const int sep = dir[bytes - 1] != '\\' && dir[bytes - 1] != '/';
+    const wchar_t name[] = L"longshot_game.dll";
+    if (n + (size_t)sep + sizeof name / sizeof name[0] > size) {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return size;
+    }
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, dir, -1, buf, count)) return 0;
+    if (sep) buf[n] = L'\\';
+    wmemcpy(buf + n + sep, name, sizeof name / sizeof name[0]);
+    return (DWORD)(n + sep + sizeof name / sizeof name[0] - 1);
+}
+#else
 static inline DWORD hos_game_path_a(char *buf, DWORD size) {
     DWORD n = GetModuleFileNameA(NULL, buf, size);
     if (!n || n >= size) return n;
@@ -54,6 +93,7 @@ static inline DWORD hos_game_path_w(wchar_t *buf, DWORD size) {
     wmemmove(buf + root, name, wcslen(name) + 1);
     return (DWORD)wcslen(buf);
 }
+#endif
 #else
 #include <unistd.h>
 #include <windows.h>   /* (linux: host/posix's, for DWORD and GetModuleFileNameA) */

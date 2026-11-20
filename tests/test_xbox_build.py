@@ -8,6 +8,7 @@ import ast
 import os
 import re
 import unittest
+import xml.etree.ElementTree as ET
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -42,6 +43,16 @@ class XboxBuild(unittest.TestCase):
             text = read(*manifest)
             self.assertNotIn("broadFileSystemAccess", text)
             self.assertIn('Name="removableStorage"', text)
+
+    def test_game_package_requests_utf8_for_game_and_renderer_paths(self):
+        manifest = ET.fromstring(read("xbox", "app", "AppxManifest.xml"))
+        ns = {"f": "http://schemas.microsoft.com/appx/manifest/foundation/windows10",
+              "uap7": "http://schemas.microsoft.com/appx/manifest/uap/windows10/7",
+              "uap8": "http://schemas.microsoft.com/appx/manifest/uap/windows10/8"}
+        app = manifest.find("f:Applications/f:Application", ns)
+        self.assertIsNotNone(app)
+        self.assertEqual(app.findtext("uap7:Properties/uap8:ActiveCodePage", namespaces=ns), "UTF-8")
+        self.assertTrue({"uap7", "uap8"} <= set(manifest.get("IgnorableNamespaces", "").split()))
 
     def test_link_names_no_desktop_library(self):
         libs = assigned("UWP_LIBS")

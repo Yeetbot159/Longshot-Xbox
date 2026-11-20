@@ -93,8 +93,12 @@ int main(int argc, char** argv) {
     const std::string module = argv[2];
     const int seconds = std::atoi(argv[3]);
     g_local = argv[4];
-    g_game = parent(argv[5]);
+    g_game = parent(argc > 6 ? argv[6] : module);
     g_work = parent(parent(module));
+    if (!SetEnvironmentVariableW(L"LONGSHOT_XBOX_GAME_DIR", widen(g_game.c_str()).c_str())) {
+        std::fprintf(stderr, "could not set the game folder (%lu)\n", GetLastError());
+        return 1;
+    }
 
     mod::Config cfg;
     cfg.folder = widen(argv[1]);

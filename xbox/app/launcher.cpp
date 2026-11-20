@@ -425,6 +425,22 @@ void play() {
         S.note("No game module yet at " + narrow(module.wstring()) + ": build the game first.");
         return done();
     }
+    const fs::path game_folder = module.parent_path();
+    const fs::path image = game_folder / "image.bin";
+    if (!fs::is_regular_file(image, ec)) {
+        S.note("No game image at " + narrow(image.wstring()) + ": build the game again.");
+        return done();
+    }
+    if (GetACP() != CP_UTF8)
+        S.note("UTF-8 paths are unavailable on this system; non-ASCII game paths may not work.");
+    if (narrow(game_folder.wstring()).size() + sizeof("\\longshot_game.dll") > MAX_PATH) {
+        S.note("The game folder path is too long. Move it to a shorter path and build again.");
+        return done();
+    }
+    if (!SetEnvironmentVariableW(L"LONGSHOT_XBOX_GAME_DIR", game_folder.c_str())) {
+        S.note("Could not set the game folder for the renderer (" + std::to_string(GetLastError()) + ").");
+        return done();
+    }
     S.note("Loading " + narrow(module.wstring()) + "...");
     // (the mode's renderer settings: in the process's environment before the module loads, as its C runtime copies the
     // environment when it starts)
@@ -469,7 +485,6 @@ void play() {
         return done();
     }
     const fs::path work = lx::work_folder(drive);
-    const fs::path game_folder = romfs_folder.parent_path();
     lx::PlatformPaths paths{narrow(local_folder.wstring()), narrow(game_folder.wstring()), narrow(work.wstring())};
     const LongshotUwpPlatform* table =
         lx::platform_init(g_window, paths, uint32_t(model), memory_limit, [](const std::string& s) { S.note(s); });
@@ -483,8 +498,7 @@ void play() {
     S.note(line);
     // (the command line a PC's launcher gives: the built image, the player's romfs, the user folder)
     auto* start = new GameStart{game_main, {"longshot"}};
-    const fs::path image = module.parent_path() / "image.bin";
-    if (fs::exists(image, ec)) start->args.push_back(narrow(image.wstring()));
+    start->args.push_back(narrow(image.wstring()));
     start->args.insert(start->args.end(), {"--romfs", narrow(romfs_folder.wstring()), "--user", narrow(local_folder.wstring())});
     g_playing = true;
     // (the game's main thread: a PC's has 8 MB reserved by the build's link; more here, as reserving costs nothing)

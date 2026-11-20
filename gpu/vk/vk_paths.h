@@ -3,7 +3,8 @@
 // game_module_path answers as GetModuleFileNameA(nullptr, ...) does, with the folder's path when the exe is in a "bin" folder
 // beside image.bin. What the game makes as it runs goes in two folders of the game folder: cache/ (cache_path: the shader and
 // pipeline caches, made for this build and this GPU, which can be deleted) and logs/ (log_path: the logs and traces). The host
-// makes both at its start and moves a build's from before into them (host/game_layout.c).
+// makes both at its start and moves a build's from before into them (host/game_layout.c). On Xbox the launcher supplies
+// the built game folder through LONGSHOT_XBOX_GAME_DIR before it loads the renderer.
 #pragma once
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -19,6 +20,20 @@
 
 namespace mkwvk {
 inline DWORD game_module_path(char* buf, DWORD size) {
+#ifdef LONGSHOT_UWP
+    wchar_t folder[MAX_PATH];
+    const DWORD n = GetEnvironmentVariableW(L"LONGSHOT_XBOX_GAME_DIR", folder, MAX_PATH);
+    if (!n || n >= MAX_PATH) return 0;
+    const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, folder, int(n), nullptr, 0, nullptr, nullptr);
+    if (!count) return 0;
+    const bool sep = folder[n - 1] != L'\\' && folder[n - 1] != L'/';
+    constexpr char name[] = "longshot_game.dll";
+    if (size_t(count) + size_t(sep) + sizeof name > size) return size;
+    if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, folder, int(n), buf, count, nullptr, nullptr)) return 0;
+    if (sep) buf[count] = '\\';
+    std::memcpy(buf + count + sep, name, sizeof name);
+    return DWORD(count + sep + sizeof name - 1);
+#else
     DWORD n = GetModuleFileNameA(nullptr, buf, size);
     if (!n || n >= size) return n;
     char* name = buf + n;
@@ -36,6 +51,7 @@ inline DWORD game_module_path(char* buf, DWORD size) {
     if (GetFileAttributesA(probe) == INVALID_FILE_ATTRIBUTES) return n;
     std::memmove(buf + root, name, std::strlen(name) + 1);
     return (DWORD)std::strlen(buf);
+#endif
 }
 /// The game folder, with its separator at the end
 inline std::string game_folder_path() {

@@ -8,6 +8,8 @@
 #include <string.h>
 
 #include "../uwp_platform.h"
+#define LONGSHOT_UWP 1
+#include "../../hos_paths.h"
 
 int longshot_uwp_set_platform(const LongshotUwpPlatform *p);
 int longshot_uwp_main(int argc, char **argv);
@@ -123,12 +125,33 @@ DWORD WINAPI XInputSetState(DWORD dwUserIndex, UwpTestVibration *pVibration);
 
 int main(void) {
     char *args[] = {"longshot", "--romfs", "E:\\OoT\\romfs"};
+    char game_path[MAX_PATH];
+    wchar_t game_path_w[MAX_PATH];
+    CHECK(!hos_game_path_a(game_path, MAX_PATH) && GetLastError() == ERROR_PATH_NOT_FOUND,
+          "game path is unavailable before the platform table");
     CHECK(longshot_uwp_main(3, args) == 1 && game_argc == 0, "no game before the table");
     LongshotUwpPlatform old = platform;
     old.version = 0;
     CHECK(!longshot_uwp_set_platform(&old), "a table of another version is refused");
     CHECK(longshot_uwp_set_platform(&platform), "the table is taken");
     CHECK(longshot_uwp_main(3, args) == 7 && game_argc == 3, "the game's main gets the command line");
+    CHECK(!hos_game_path_a(game_path, MAX_PATH) && GetLastError() == ERROR_PATH_NOT_FOUND,
+          "an empty game folder is not the package folder");
+    platform.game_folder = "E:\\Longshot\\g\xc3\xa4me";
+    CHECK(hos_game_path_a(game_path, MAX_PATH) == strlen("E:\\Longshot\\g\xc3\xa4me\\longshot_game.dll") &&
+              !strcmp(game_path, "E:\\Longshot\\g\xc3\xa4me\\longshot_game.dll"),
+          "game path uses the built folder, not the package or ROMFS");
+    CHECK(hos_game_path_w(game_path_w, MAX_PATH) == wcslen(L"E:\\Longshot\\g\u00e4me\\longshot_game.dll") &&
+              !wcscmp(game_path_w, L"E:\\Longshot\\g\u00e4me\\longshot_game.dll"),
+          "wide game path decodes UTF-8");
+    CHECK(hos_game_path_a(game_path, 4) == 4 && hos_game_path_w(game_path_w, 4) == 4,
+          "game paths report insufficient buffer space");
+    CHECK(hos_game_path_a(game_path, (DWORD)sizeof("E:\\Longshot\\g\xc3\xa4me\\longshot_game.dll")) ==
+              sizeof("E:\\Longshot\\g\xc3\xa4me\\longshot_game.dll") - 1,
+          "a game path exactly fitting the buffer succeeds");
+    platform.game_folder = "E:\\Longshot\\game\\";
+    CHECK(hos_game_path_a(game_path, MAX_PATH) && !strcmp(game_path, "E:\\Longshot\\game\\longshot_game.dll"),
+          "game folder with a trailing separator is accepted");
 
     CHECK(MessageBoxA(NULL, "the text", "the title", MB_OK | MB_ICONERROR) == IDOK && !strcmp(said_title, "the title") &&
               !strcmp(said_text, "the text"),
