@@ -5,7 +5,7 @@ name: Xbox packages
 on:
   push:
     branches: [main]
-    paths: ['xbox/**', 'host/uwp/**', 'gpu/**', 'nx2/**', 'tests/test_xbox_build.py', '.github/workflows/xbox.yml']
+    paths: ['xbox/**', 'host/uwp/**', 'gpu/**', 'nx2/**', 'tests/test_xbox_build.py', 'tests/test_xbox_tool_package.py', '.github/workflows/xbox.yml']
     tags: ['xbox-v*']
   workflow_dispatch:
 
@@ -100,7 +100,7 @@ jobs:
       - name: Launcher and host checks
         shell: pwsh
         run: |
-          foreach ($test in 'test_xbox_build.py', 'test_make_game_prepare.py', 'test_make_game_writable.py', 'test_prompt_skip.py') {
+          foreach ($test in 'test_xbox_build.py', 'test_make_game_prepare.py', 'test_make_game_writable.py', 'test_missing_nup.py', 'test_make_game_cache.py', 'test_work_lock.py', 'test_finish_output.py', 'test_prompt_skip.py') {
             python -I -B "tests/$test"
             if ($LASTEXITCODE) { throw "$test failed" }
           }

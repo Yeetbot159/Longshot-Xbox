@@ -94,6 +94,24 @@ if ($IncludeTools) {
         $p = Join-Path $RepoRoot $dir
         if (Test-Path $p) { Copy-Item -Recurse $p (Join-Path $tools $dir) }
     }
+    # The UWP host build reads these headers even though the renderer is prebuilt.
+    foreach ($dir in 'gpu\render', 'gpu\vk', 'gpu\vk\compat') {
+        $dest = Join-Path $tools $dir
+        New-Item -ItemType Directory -Force $dest | Out-Null
+        Copy-Item (Join-Path $RepoRoot "$dir\*.h") $dest
+    }
+
+    # Installed MSIX files are read-only: build both Python native helpers before signing.
+    $oldMingw = $env:LONGSHOT_MINGW
+    try {
+        $env:LONGSHOT_MINGW = $m
+        & (Join-Path $py 'python.exe') -I (Join-Path $PSScriptRoot 'prepare_builder.py') $tools
+        if ($LASTEXITCODE) { throw "Builder native helpers failed ($LASTEXITCODE)" }
+        & (Join-Path $py 'python.exe') -I -B (Join-Path $RepoRoot 'tests\test_xbox_tool_package.py') $tools
+        if ($LASTEXITCODE) { throw "Staged builder checks failed ($LASTEXITCODE)" }
+    } finally {
+        $env:LONGSHOT_MINGW = $oldMingw
+    }
     Write-Host 'Tool bundling completed.'
 }
 

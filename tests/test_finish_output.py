@@ -65,15 +65,37 @@ class FinishOutputTests(unittest.TestCase):
             if path.is_file():
                 path.chmod(stat.S_IREAD | stat.S_IWRITE)
 
-    def finish(self, launcher=False):
+    def finish(self, launcher=False, xbox=False):
         if launcher:
             (self.root / "LongshotBuilder-Setup.exe").write_bytes(b"new synthetic launcher")
-        with mock.patch.object(make_game, "BESIDE", ["longshot.exe"]):
+        with mock.patch.object(make_game, "BESIDE", ["longshot_game.dll" if xbox else "longshot.exe"]):
             # Comprehensions use globals. Keep one namespace, as in production, and discover only authored setup files.
             namespace = dict(make_game.__dict__, built=str(self.built), out=str(self.out), work=str(self.work),
-                             ROOT=str(self.root / "tools"), LINUX=False if launcher else make_game.LINUX,
+                             ROOT=str(self.root / "tools"), XBOX=xbox, LINUX=False if launcher else make_game.LINUX,
                              a=SimpleNamespace(fsr=False, no_fsr=False, update=None, fetch_fsr_runtime=False))
             exec(FINISH, namespace)
+
+    def test_xbox_missing_outputs_keep_the_previous_game(self):
+        module = self.built / "longshot_game.dll"
+        installed = self.out / "longshot_game.dll"
+        installed.write_bytes(b"existing module")
+        for missing in ("module", "image"):
+            with self.subTest(missing=missing):
+                module.write_bytes(b"new module")
+                self.image.write_bytes(b"new synthetic image")
+                (module if missing == "module" else self.image).unlink()
+                with contextlib.redirect_stdout(io.StringIO()) as output, self.assertRaises(SystemExit):
+                    self.finish(xbox=True)
+                self.assertIn("The Xbox build did not produce", output.getvalue())
+                self.assertEqual(installed.read_bytes(), b"existing module")
+                self.assertEqual((self.out / "image.bin").read_bytes(), b"existing synthetic image")
+                self.assertEqual(list(self.out.glob("*.new")), [])
+
+    def test_xbox_installs_both_outputs_when_present(self):
+        (self.built / "longshot_game.dll").write_bytes(b"new module")
+        self.finish(xbox=True)
+        self.assertEqual((self.out / "longshot_game.dll").read_bytes(), b"new module")
+        self.assertEqual((self.out / "image.bin").read_bytes(), b"new synthetic image")
 
     def assert_installed_unchanged(self):
         self.assertEqual(self.destination.read_bytes(), b"existing synthetic executable")

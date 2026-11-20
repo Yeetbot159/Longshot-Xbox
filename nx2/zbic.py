@@ -17,10 +17,9 @@ DLL = os.path.join(SRC, "zbic.dll" if os.name == "nt" else "zbic.so")
 _lib = None
 
 
-def _build():
-    # (the one that came with the tools is used as it is. This compared file dates, which unpacking a zip can change: the source then
-    # looked newer, and reading a .nup needed Microsoft's C library, which a player need not have at that point)
-    if os.path.exists(DLL):
+def _build(force=False):
+    # (use the bundled binary as it is, unless packaging explicitly requests a fresh one; file dates can change on extraction)
+    if not force and os.path.exists(DLL):
         return
     srcs = [os.path.join(SRC, "zstd.c"), os.path.join(SRC, "zbic_api.c")]
     cmd = [toolchain.need(toolchain.find("clang", host=True)), *toolchain.native_target(host=True), *toolchain.native_link(host=True),

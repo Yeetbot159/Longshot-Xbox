@@ -28,6 +28,7 @@ class MissingNupTests(unittest.TestCase):
         self.assertEqual(self.root.parent, Path(tempfile.gettempdir()).resolve())
         self.package = self.root / "selected game \u6f22 [1].nup"
         self.out, self.work = self.root / "output", self.root / "work"
+        self.addCleanup(self.close_work_lock)
         (self.out / "romfs").mkdir(parents=True)
         (self.out / "romfs/asset").write_bytes(b"authored asset")
         (self.out / ".longshot_exefs").mkdir()
@@ -37,6 +38,12 @@ class MissingNupTests(unittest.TestCase):
         (self.out / ".longshot_romfs").write_text("previous authored package\n", encoding="utf-8")
         self.before = self.files()
         self.events = []
+
+    def close_work_lock(self):
+        if make_game._WORK_LOCK:
+            self.assertEqual(Path(make_game._WORK_LOCK[0]), self.work / make_game.WORK_LOCK)
+            make_game._WORK_LOCK[1].close()
+            make_game._WORK_LOCK.clear()
 
     def files(self):
         return {p.relative_to(self.out).as_posix(): p.read_bytes() for p in self.out.rglob("*") if p.is_file()}

@@ -44,6 +44,7 @@ class NupCacheTests(unittest.TestCase):
         self.out = self.root / "output"
         self.work = self.root / "work"
         self.addCleanup(self.assert_owned_fixture)
+        self.addCleanup(self.close_work_lock)
         self.out.mkdir()
         self.work.mkdir()
         self.old_nup = self.root / "old.nup"
@@ -62,6 +63,12 @@ class NupCacheTests(unittest.TestCase):
         (self.out / "longshot_options.ini").write_bytes(b"authored options sentinel")
         self.extractions = []
         self.output = ""
+
+    def close_work_lock(self):
+        if make_game._WORK_LOCK:
+            self.assertEqual(Path(make_game._WORK_LOCK[0]), self.work / make_game.WORK_LOCK)
+            make_game._WORK_LOCK[1].close()
+            make_game._WORK_LOCK.clear()
 
     def assert_owned_fixture(self):
         # The builder only receives descendants of this test-owned temporary directory.
@@ -132,6 +139,7 @@ class NupCacheTests(unittest.TestCase):
             # key hashes nx2/ relative to the checkout, which relpath refuses across drives (Windows CI): not what is checked here)
             stack.enter_context(mock.patch.object(make_game, "ROOT", str(self.root / "checkout")))
             stack.enter_context(mock.patch.object(make_game, "lift_key", return_value="test key"))
+            stack.enter_context(mock.patch.object(make_game, "vk_profile_for", return_value=None))
             stack.enter_context(mock.patch.object(make_game, "run", side_effect=run))
             output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             try:

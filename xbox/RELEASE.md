@@ -23,6 +23,10 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- The console builder package now includes the GPU headers needed for compilation and prebuilds its translator and ZBIC
+  helper DLLs rather than writing them into the read-only installation. Windows package checks exercise these files;
+  loading the helpers and completing a build on Xbox remain unverified.
+- Xbox builds now stop before installation if their game module or image is missing, preserving any existing build.
 - The console builder starts its Python scripts by absolute path and saves full output in the app's
   `LocalState\build-console.log`; recent activity wraps on screen. The reported `unpack.py` failure's full
   cause was not visible, so this still needs verification on Xbox.

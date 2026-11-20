@@ -2536,6 +2536,10 @@ def main(a=None):
     # bin\longshot.exe. The game and its DLLs are in bin\; its files (image.bin, romfs, saves, settings, caches)
     # stay in the folder (host/hos_paths.h). Without the setup (a development build) the game stays longshot.exe in the folder
     staged = []
+    if XBOX:
+        for required in (os.path.join(built, "longshot_game.dll"), os.path.join(work, "sa", "image", "image.bin")):
+            if not os.path.isfile(required):
+                fail("The Xbox build did not produce %s. The existing game module and image were not replaced." % required)
     # (Linux) the same launcher, as a script, when this is a packaged builder (the AppImage sets LONGSHOT_TOOLS). A source
     # checkout leaves longshot in the folder, as a development build on Windows does when the setup exe is not beside it
     launcher = os.path.join(os.path.dirname(os.path.abspath(ROOT)), "LongshotBuilder-Setup.exe")
