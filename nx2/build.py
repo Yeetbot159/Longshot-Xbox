@@ -520,14 +520,15 @@ class MemoryGate:
     compilers on 16 GB PCs took hours); on Linux one (issue 531: Linux stops a compiler that does not fit, and it is compiled again
     alone). The free memory is read again as compiles start and end, so a game or browser opened during the build makes later
     compiles wait. With LONGSHOT_MEM_LIMIT_GB the player chooses instead: a compile starts when the needs of those running and its
-    own fit in that, whatever is free, above the same floor"""
+    own fit in that, whatever is free, above the same floor. Xbox uses a floor of one so a second compiler must fit
+    the estimated budget; one oversized compile can still run to avoid a deadlock."""
 
     def __init__(self):
         self.cv = threading.Condition()
         self.running = {}   # (per-compile lease: [need, Popen or None]; one source can have several objects)
         self.reserve = float(os.environ.get("LONGSHOT_MEM_RESERVE_GB") or 1.5) * 1024
         self.limit = mem_limit_mb()
-        self.floor = max(1, min(4, (os.cpu_count() or 2) // 2)) if os.name == "nt" else 1
+        self.floor = max(1, min(4, (os.cpu_count() or 2) // 2)) if os.name == "nt" and not UWP else 1
 
     def fits(self, need):
         if self.limit:

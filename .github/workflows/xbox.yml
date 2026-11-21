@@ -100,7 +100,7 @@ jobs:
       - name: Launcher and host checks
         shell: pwsh
         run: |
-          foreach ($test in 'test_xbox_build.py', 'test_make_game_prepare.py', 'test_make_game_writable.py', 'test_missing_nup.py', 'test_make_game_cache.py', 'test_work_lock.py', 'test_finish_output.py', 'test_prompt_skip.py') {
+          foreach ($test in 'test_xbox_build.py', 'test_make_game_prepare.py', 'test_make_game_writable.py', 'test_missing_nup.py', 'test_make_game_cache.py', 'test_work_lock.py', 'test_finish_output.py', 'test_prompt_skip.py', 'test_mem_gate.py', 'test_mem_gate_leases.py', 'test_chunk_split.py') {
             python -I -B "tests/$test"
             if ($LASTEXITCODE) { throw "$test failed" }
           }

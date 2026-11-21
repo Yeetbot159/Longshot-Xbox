@@ -67,6 +67,11 @@ try to start Python or clang, and a complete builder run has not yet succeeded o
 memory use during linking, and writable USB discovery are still open. It is an experimental implementation, not a
 verified console build.
 
+For Xbox builds, lift processing defaults to one worker instead of using system-wide free memory to size its pool.
+`LONGSHOT_LIFT_JOBS` can override this default.
+The compiler gate admits a second compiler only when estimated needs fit its budget, though it still permits one
+oversized compile to run. These are scheduling safeguards, not hard process-memory limits; Xbox measurement is needed.
+
 The Series S game profile also limits renderer shader/pipeline workers and asynchronous shader-load workers to one
 each; Series X allows two each. This reduces transient compiler concurrency against the consoles' shared CPU/GPU
 memory limits, at the cost of slower shader preparation and first use. These are conservative settings, not a measured

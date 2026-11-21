@@ -145,6 +145,9 @@ def file_jobs():
     they cannot be forked: the three passes over the 1.5 GB of C took ~30 s in one process on Windows"""
     if os.environ.get("LONGSHOT_LIFT_JOBS"):
         return max(1, int(os.environ["LONGSHOT_LIFT_JOBS"]))
+    # GlobalMemoryStatusEx is system-wide and does not report the Xbox app's memory budget.
+    if os.environ.get("LONGSHOT_XBOX", "").strip().lower() not in ("", "0", "false", "off", "no"):
+        return 1
     try:
         n = len(os.sched_getaffinity(0))
     except AttributeError:

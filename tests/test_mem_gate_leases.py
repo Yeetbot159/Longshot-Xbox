@@ -23,7 +23,7 @@ def actual_build(source):
     names = {"MemoryGate", "compile_one", "mem_need", "mem_limit_mb"}
     nodes = [node for node in tree.body if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in names]
     assert {node.name for node in nodes} == names
-    scope = dict(os=os, math=math, threading=threading, time=time, COMPILER_MB=1500,
+    scope = dict(os=os, math=math, threading=threading, time=time, COMPILER_MB=1500, UWP=False,
                  free_mb=lambda: 1000000, rss_mb=lambda process: 0)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), scope)
     return scope

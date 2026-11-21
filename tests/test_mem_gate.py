@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "nx2"))
@@ -32,6 +33,32 @@ def check(what, ok):
 def main():
     free = build.free_mb()
     check("the free memory reads (%r)" % free, isinstance(free, int) and free > 0)
+
+    with mock.patch.object(build, "UWP", True), \
+            mock.patch.dict(os.environ, {"LONGSHOT_MEM_LIMIT_GB": "3"}):
+        gate = build.MemoryGate()
+        check("Xbox compiler floor is one", gate.floor == 1)
+        with mock.patch.object(build, "mem_need", return_value=2000):
+            first = gate.enter("first")
+            check("a second 2 GB compiler exceeds the 3 GB estimate", not gate.fits(2000))
+            started = threading.Event()
+            second = []
+            def enter_second():
+                second.append(gate.enter("second"))
+                started.set()
+            worker = threading.Thread(target=enter_second, daemon=True)
+            worker.start()
+            try:
+                check("the second compiler waits for the first", not started.wait(0.2))
+            finally:
+                gate.leave(first)
+                worker.join(5)
+            check("the waiting compiler starts after release", started.is_set())
+            gate.leave(second[0])
+        with mock.patch.object(build, "mem_need", return_value=4000):
+            oversized = gate.enter("oversized")
+            check("one oversized compile can still start", oversized in gate.running)
+            gate.leave(oversized)
 
     with tempfile.TemporaryDirectory(prefix="longshot-mem-gate-") as d:
         small = os.path.join(d, "code_000.c")

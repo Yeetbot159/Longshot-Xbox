@@ -23,6 +23,8 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- Xbox builds default to one lift worker and apply the compiler memory estimate before starting a second compiler.
+  An oversized first compiler can still run; neither setting is a hard memory cap, and console validation is pending.
 - The launcher directs the game and renderer to the built game folder for caches and logs while keeping the selected
   ROMFS as the asset source. The host-side correction requires rebuilding the game module; Xbox play is unverified.
 - The package requests UTF-8 for narrow file paths and warns if the system does not enable it; console behavior is unverified.

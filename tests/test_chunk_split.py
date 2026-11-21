@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "nx2"))
@@ -29,6 +30,17 @@ def check(what, ok):
 
 
 def main():
+    with mock.patch.dict(os.environ, {"LONGSHOT_XBOX": "1"}, clear=True):
+        check("Xbox defaults to one lift worker", chunks.file_jobs() == 1)
+        os.environ["LONGSHOT_LIFT_JOBS"] = "2"
+        check("an explicit lift worker count is honored", chunks.file_jobs() == 2)
+        os.environ["LONGSHOT_XBOX"] = "0"
+        os.environ.pop("LONGSHOT_LIFT_JOBS")
+        with mock.patch.object(chunks, "_available_gb", return_value=100), \
+                mock.patch.object(chunks.os, "cpu_count", return_value=4), \
+                mock.patch.object(chunks.os, "sched_getaffinity", return_value={0, 1, 2, 3}, create=True), \
+                mock.patch.object(chunks, "_no_fork", return_value=True):
+            check("desktop defaults retain parallel lift workers", chunks.file_jobs() == 4)
     budget = 200000
     with tempfile.TemporaryDirectory(prefix="longshot-chunk-split-") as d:
         small = [function(0x80000000 + 16 * i, 2000) for i in range(60)]
