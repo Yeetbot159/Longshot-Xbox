@@ -148,6 +148,16 @@ class CleanupTests(unittest.TestCase):
         self.assertNotIn("stopped 1", log)
         self.assertEqual(self.invoke([python(1)], linux=True)[0], [])
 
+    def test_xbox_does_not_launch_unavailable_powershell(self):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(module, "XBOX", True))
+            stack.enter_context(mock.patch.object(module, "LINUX", False))
+            stack.enter_context(mock.patch.object(module.subprocess, "run",
+                                                  side_effect=AssertionError("Xbox has no PowerShell")))
+            log = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            module.stop_stray_compilers(WORK, WORK)
+        self.assertIn("Xbox cannot query earlier builder processes", log.getvalue())
+
     def test_quoted_argument_roundtrip(self):
         if not hasattr(module, "_cleanup_argv"):
             self.fail("Windows argument ownership parser is missing")

@@ -23,6 +23,10 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- Packaged NumPy DLLs beside their extension modules; the console builder's `numpy` import no longer calls the
+  unsupported `os.add_dll_directory` on the read-only app package.
+- Skipped the unavailable PowerShell process query on Xbox and now report the limitation directly; interrupted compiler
+  processes still need manual cleanup.
 - Xbox builds default to one lift worker and apply the compiler memory estimate before starting a second compiler.
   An oversized first compiler can still run; neither setting is a hard memory cap, and console validation is pending.
 - The launcher directs the game and renderer to the built game folder for caches and logs while keeping the selected

@@ -60,6 +60,8 @@ module stay on the selected ROMFS drive under `Longshot\work` and `Longshot\game
 remains the game's asset source; game-folder caches and logs use `Longshot\game`, not the installed app directory.
 The host path correction requires rebuilding the game module with the updated tools.
 The package requests UTF-8 as the process code page for paths containing non-ASCII characters; this needs console verification.
+The packaged Python builder places NumPy's DLLs beside its extension modules so imports do not rely on
+`os.add_dll_directory`, which fails for package paths on the tested console.
 The Series S probe measured a
 5,120 MB app memory limit, a 4,864 MB commit ceiling, executable generated code, and successful creation of a child
 copy of the probe. The builder uses one compile job with a 3 GB compiler budget. The probe did not
@@ -71,6 +73,7 @@ For Xbox builds, lift processing defaults to one worker instead of using system-
 `LONGSHOT_LIFT_JOBS` can override this default.
 The compiler gate admits a second compiler only when estimated needs fit its budget, though it still permits one
 oversized compile to run. These are scheduling safeguards, not hard process-memory limits; Xbox measurement is needed.
+Because PowerShell process inspection is unavailable in the app, an interrupted compiler may need to be stopped manually.
 
 The Series S game profile also limits renderer shader/pipeline workers and asynchronous shader-load workers to one
 each; Series X allows two each. This reduces transient compiler concurrency against the consoles' shared CPU/GPU

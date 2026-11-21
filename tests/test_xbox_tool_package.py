@@ -16,6 +16,26 @@ PYTHON = TOOLS / "python" / "python.exe"
 
 
 class XboxToolPackageTests(unittest.TestCase):
+    def test_numpy_loads_without_add_dll_directory(self):
+        site = TOOLS / "python" / "Lib" / "site-packages"
+        numpy_core = site / "numpy" / "_core"
+        self.assertFalse((site / "numpy.libs").exists())
+        self.assertTrue(list(numpy_core.glob("*.dll")), "NumPy DLL dependencies must be beside its extension modules")
+        script = """
+import os
+def unavailable(path):
+    raise OSError(87, 'AddDllDirectory is unavailable')
+os.add_dll_directory = unavailable
+import numpy
+assert numpy.__version__
+"""
+        env = os.environ.copy()
+        env["PATH"] = str(Path(env["SYSTEMROOT"]) / "System32")
+        env["LONGSHOT_XBOX"] = "1"
+        result = subprocess.run([str(PYTHON), "-I", "-B", "-c", script],
+                                cwd=TOOLS, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_host_gpu_includes_are_packaged(self):
         includes = set()
         for source in (TOOLS / "host").rglob("*"):

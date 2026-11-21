@@ -80,6 +80,17 @@ if ($IncludeTools) {
         New-Item -ItemType Directory -Force $site | Out-Null
         Copy-Item -Recurse -Force (Join-Path $PythonVenv 'Lib\site-packages\*') $site
     }
+    # NumPy's desktop delvewheel hook calls AddDllDirectory for numpy.libs. Xbox rejects that call
+    # for package paths; colocate its dependencies with the extension modules and omit the hook directory.
+    $numpyLibs = Join-Path $py 'Lib\site-packages\numpy.libs'
+    if (Test-Path $numpyLibs) {
+        $numpyDlls = @(Get-ChildItem -LiteralPath $numpyLibs -Filter '*.dll' -File)
+        if (-not $numpyDlls.Count) { throw 'NumPy has a numpy.libs directory but no DLL dependencies' }
+        $numpyCore = Join-Path $py 'Lib\site-packages\numpy\_core'
+        if (-not (Test-Path $numpyCore)) { throw "NumPy extension directory not found: $numpyCore" }
+        foreach ($dll in $numpyDlls) { Copy-Item -LiteralPath $dll.FullName -Destination $numpyCore -Force }
+        Remove-Item -LiteralPath $numpyLibs -Recurse -Force
+    }
 
     # 2. llvm-mingw
     $m = Join-Path $tools 'llvm-mingw'

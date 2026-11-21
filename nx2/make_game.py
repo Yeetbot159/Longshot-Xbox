@@ -1072,6 +1072,10 @@ def stop_stray_compilers(work, default_work):
     Unknown orphan ownership is preserved. Never terminate an unexamined child tree."""
     if LINUX:
         return
+    if XBOX:
+        print("Xbox cannot query earlier builder processes; an interrupted compiler may need to be stopped manually.",
+              flush=True)
+        return
     ps = ("Get-CimInstance Win32_Process | "
           "Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress")
     try:

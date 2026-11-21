@@ -272,12 +272,20 @@ void run_or_measure_build() {
         fs::path out = lx::game_out(drive);
         fs::path work = lx::work_folder(drive);
 
-        SetEnvironmentVariableW(L"LONGSHOT_XBOX", L"1");
-        SetEnvironmentVariableW(L"LONGSHOT_MINGW", mingw_dir.c_str());
+        auto set_build_environment = [](const wchar_t* name, const wchar_t* value) {
+            if (SetEnvironmentVariableW(name, value)) return true;
+            const DWORD error = GetLastError();
+            S.note("Could not configure " + narrow(name) + " for the console builder (" + std::to_string(error) + ").");
+            return false;
+        };
+        if (!set_build_environment(L"LONGSHOT_XBOX", L"1") ||
+            !set_build_environment(L"LONGSHOT_MINGW", mingw_dir.c_str()))
+            return finish();
         // The Series S probe measured a 5,120 MB app limit and a 4,864 MB commit ceiling. Compile one
         // translation unit at a time and leave headroom for Python, the app, and the linker.
-        SetEnvironmentVariableW(L"LONGSHOT_MEM_LIMIT_GB", L"3.0");
-        SetEnvironmentVariableW(L"LONGSHOT_MEM_RESERVE_GB", L"1.5");
+        if (!set_build_environment(L"LONGSHOT_MEM_LIMIT_GB", L"3.0") ||
+            !set_build_environment(L"LONGSHOT_MEM_RESERVE_GB", L"1.5"))
+            return finish();
 
         std::wstring cmd = L"\"" + py_exe.wstring() + L"\" -I -u \"" + script.wstring() +
                            L"\" --romfs \"" + romfs_folder.wstring() + L"\" --exefs \"" + exefs_folder.wstring() +
@@ -450,10 +458,21 @@ void play() {
         mode = S.mode;
     }
     const lx::Profile& profile = lx::profile_for(mode, model);
-    for (const auto& [name, value] : profile.env)
-        SetEnvironmentVariableW(widen(name).c_str(), widen(value).c_str());
+    for (const auto& [name, value] : profile.env) {
+        const std::wstring wide_name = widen(name), wide_value = widen(value);
+        if (!SetEnvironmentVariableW(wide_name.c_str(), wide_value.c_str())) {
+            const DWORD error = GetLastError();
+            S.note("Could not configure renderer profile " + name + " (" + std::to_string(error) + ").");
+            return done();
+        }
+    }
     const std::string renderer_cap = std::to_string(lx::renderer_memory_cap_mb(profile, expected_memory_limit));
-    SetEnvironmentVariableW(L"RX_VK_MEMORY_MB", widen(renderer_cap).c_str());
+    const std::wstring wide_renderer_cap = widen(renderer_cap);
+    if (!SetEnvironmentVariableW(L"RX_VK_MEMORY_MB", wide_renderer_cap.c_str())) {
+        const DWORD error = GetLastError();
+        S.note("Could not configure the renderer memory limit (" + std::to_string(error) + ").");
+        return done();
+    }
     // (the package's modules: the renderer, Dozen and the TLS slot; DComp.DLL is the app's own, for Dozen's swap chain)
     static const bool modules_ready = [] {
         lx::modules::Config cfg;
