@@ -738,7 +738,9 @@ def flag_text(fl):
 def object_key(src, fl, deps):
     """What an object depends on: its source, the flags (flag_text), and the headers. (A lifted file the last build's clean-up let
     go, KEPT, is named by the key that build wrote down: main puts it in PLANNED once it checked its flags and headers)"""
-    return hashlib.sha1(open(src, "rb").read() + flag_text(fl).encode() + deps, usedforsecurity=False).hexdigest()
+    with open(src, "rb") as f:
+        content = f.read()
+    return hashlib.sha1(content + flag_text(fl).encode() + deps, usedforsecurity=False).hexdigest()
 
 
 def key_of(src, fl, deps):
@@ -748,7 +750,8 @@ def key_of(src, fl, deps):
     entry, st = known(src)
     if entry is not None and part in entry["keys"]:
         return entry["keys"][part]
-    content = open(src, "rb").read()
+    with open(src, "rb") as f:
+        content = f.read()
     key = hashlib.sha1(content + flag_text(fl).encode() + deps, usedforsecurity=False).hexdigest()
     remember(src, st, content)["keys"][part] = key
     return key
@@ -801,7 +804,9 @@ def content_sha1(src):
     entry, st = known(src)
     if entry is not None:
         return entry["sha1"]
-    return remember(src, st, open(src, "rb").read())["sha1"]
+    with open(src, "rb") as f:
+        content = f.read()
+    return remember(src, st, content)["sha1"]
 
 
 def load_hashes(out):
@@ -953,8 +958,10 @@ def plan_jobs(jobs):
         key = PLANNED.get((src, obj)) or key_of(src, fl, deps)
         keys[(src, obj)] = key
         stamp = obj + ".sha1"
-        if os.path.exists(obj) and os.path.exists(stamp) and open(stamp).read() == key:
-            continue
+        if os.path.exists(obj) and os.path.exists(stamp):
+            with open(stamp) as f:
+                if f.read() == key:
+                    continue
         if os.path.exists(os.path.join(OBJ_CACHE, key + ".o")):
             continue
         work.append((cc, src, obj, fl, deps))
@@ -976,13 +983,16 @@ def migrate_stamps(gen, obj_dir, fl, deps):
         if not (os.path.exists(obj) and os.path.exists(stamp)):
             continue
         src = os.path.join(gen, f)
-        old = open(stamp).read()
+        with open(stamp) as f:
+            old = f.read()
         if os.path.exists(os.path.join(OBJ_CACHE, old + ".o")):
             continue   # (stamped with a key of today's kind already: its object is in the cache by it. Nothing to read)
-        content = open(src, "rb").read()
+        with open(src, "rb") as f:
+            content = f.read()
         if old == hashlib.sha1(content + " ".join(fl).encode() + deps, usedforsecurity=False).hexdigest():
             key = object_key(src, fl, deps)
-            open(stamp, "w").write(key)
+            with open(stamp, "w") as f:
+                f.write(key)
             cache_put(obj, key)
 
 
@@ -1015,8 +1025,10 @@ def compile_one(job):
     key = PLANNED.get((src, obj)) or object_key(src, fl, deps)
     PLANNED[(src, obj)] = key   # (for write_kept)
     stamp = obj + ".sha1"
-    if os.path.exists(obj) and os.path.exists(stamp) and open(stamp).read() == key:
-        return src, 0.0, None
+    if os.path.exists(obj) and os.path.exists(stamp):
+        with open(stamp) as f:
+            if f.read() == key:
+                return src, 0.0, None
     cached = os.path.join(OBJ_CACHE, key + ".o")
     if os.path.exists(cached):   # (the same source and flags built for the other target)
         if os.path.exists(obj):
@@ -1026,7 +1038,8 @@ def compile_one(job):
         except OSError:
             import shutil
             shutil.copyfile(cached, obj)
-        open(stamp, "w").write(key)
+        with open(stamp, "w") as f:
+            f.write(key)
         return src, 0.0, None
     c_src = src
     if any(f.startswith("-DLONGSHOT_SPLIT_GIANTS=") for f in fl):   # (LONGSHOT_SPLIT_GIANTS: a copy with the giants cut, if any)
@@ -1049,7 +1062,8 @@ def compile_one(job):
     if r.returncode:
         failure = r.stderr or r.stdout or "Compiler exited with status %d without diagnostics." % r.returncode
         return src, time.time() - t, failure[-4000:]
-    open(stamp, "w").write(key)
+    with open(stamp, "w") as f:
+        f.write(key)
     cache_put(obj, key)
     return src, time.time() - t, None
 

@@ -1,6 +1,7 @@
 """Actual MemoryGate/compile_one with authored children; no compiler, game or memory stress."""
 import argparse
 import ast
+import builtins
 from contextlib import ExitStack
 import json
 import math
@@ -173,6 +174,51 @@ class CompileGateTests(unittest.TestCase):
                 self.assertEqual(self.gate.running, {})
                 self.assertEqual(self.cached, [])
                 self.assertEqual(Path(str(obj) + ".sha1").read_text(), key)
+
+    def test_stamp_handles_close_on_compile_and_cache_hits(self):
+        job = self.jobs[0]
+        obj, key = Path(job[2]), self.keys[job[2]]
+        stamp = Path(str(obj) + ".sha1")
+        real_open = builtins.open
+        handles = []
+
+        def tracked_open(path, *args, **kwargs):
+            handle = real_open(path, *args, **kwargs)
+            if os.fspath(path) == str(stamp):
+                handles.append(handle)
+            return handle
+
+        class Child:
+            def __init__(child, args, **kwargs):
+                child.args = args
+                child.returncode = 0
+
+            def __enter__(child):
+                return child
+
+            def __exit__(child, *args):
+                return False
+
+            def communicate(child):
+                obj.write_bytes(b"compiled")
+                return "", ""
+
+        self.popen(Child)
+        try:
+            with mock.patch("builtins.open", side_effect=tracked_open):
+                self.assertIsNone(self.scope["compile_one"](job)[2])
+                self.assertTrue(handles[-1].closed)
+                self.assertEqual(self.scope["compile_one"](job), (self.src, 0.0, None))
+                self.assertTrue(handles[-1].closed)
+                obj.unlink()
+                stamp.unlink()
+                (self.cache / (key + ".o")).write_bytes(b"cached")
+                self.assertEqual(self.scope["compile_one"](job), (self.src, 0.0, None))
+                self.assertTrue(handles[-1].closed)
+            self.assertEqual(len(handles), 3)
+        finally:
+            for handle in handles:
+                handle.close()
 
 
 if __name__ == "__main__":

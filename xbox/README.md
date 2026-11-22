@@ -210,10 +210,9 @@ different pointer. This avoids invalid imports but does not replace host import 
 The 0.2.22.0 probe kept the mastering voice alive and successfully submitted and completed a stereo source buffer.
 This tests the probe's XAudio path, not game audio playback.
 
-The probe also tests a small CPU-mapped, write-back D3D12 buffer with a compute shader that reads CPU-written
-values and writes results back, checked after a GPU fence. This new experiment has not yet been run on Xbox. Even a
-success would not provide an import of the game's existing guest addresses or establish Vulkan support, pool
-coherence, memory-budget compliance, or gameplay.
+The Series S 0.2.23.0 probe tested a small CPU-mapped, write-back D3D12 buffer: a compute shader read CPU-written
+values and wrote results that the CPU verified after a GPU fence. This does not import the game's existing guest
+addresses or establish Vulkan support, pool coherence, memory-budget compliance, or gameplay.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,
 `spirv_to_dxil.dll` and `dxil.dll`): 151 of its 162 Windows functions are in the app container's library. The 11

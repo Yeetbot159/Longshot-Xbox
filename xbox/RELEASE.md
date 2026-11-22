@@ -24,7 +24,7 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 ## What changed
 
 - The probe tests a CPU-mapped D3D12 write-back buffer using a shader that reads CPU-written values and writes results
-  for the CPU to check after a fence. This experiment has not yet been run on Xbox and is not a guest-memory fallback.
+  for the CPU to check after a fence. A Series S 0.2.23.0 report passed this small test; it is not a guest-memory fallback.
 - The probe and its shader were built locally under a 5 GiB job memory limit and eight-CPU affinity, with a 33.33%
   host-wide CPU cap. The package's signature, version, contents, and executable were checked locally. These limits
   do not emulate the Xbox GPU or its UWP memory accounting.
