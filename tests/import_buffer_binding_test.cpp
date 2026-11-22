@@ -179,7 +179,8 @@ void run(const std::string& route, const std::string& test) {
     if (test == "query-error") fault = Fault::Query;
     if (test == "free-pages") fault = Fault::FreePages;
     if (test == "bad-region") fault = Fault::BadRegion;
-    if (test == "dozen-supported" || test == "dozen-no-import" || test == "dozen-incompatible" || test == "dozen-no-query")
+    if (test == "dozen-supported" || test == "dozen-capabilities-change" || test == "dozen-no-import" ||
+        test == "dozen-incompatible" || test == "dozen-no-query")
         dev.driver_id = VK_DRIVER_ID_MESA_DOZEN;
     if (test == "dozen-no-import") external_features = 0;
     if (test == "dozen-incompatible") compatible_handles = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
@@ -218,6 +219,17 @@ void run(const std::string& route, const std::string& test) {
         Pool second;
         assert(import_pool(4096, 8192, second) && allocated_type == 1 && property_queries == 2);
         release(second);
+        return;
+    }
+    if (test == "dozen-capabilities-change") {
+        assert(import_pool(0, 4096, p) && capability_queries == 1 && commit_calls == 1);
+        release(p);
+        compatible_handles = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+        Pool second;
+        assert(!import_pool(4096, 8192, second));
+        assert(capability_queries == 2 && commit_calls == 1 && property_queries == 1 && creates == 1);
+        assert(import_result == VK_ERROR_FEATURE_NOT_PRESENT && import_on_hold(4096, 8192));
+        empty();
         return;
     }
     const bool success = call(route, p);
