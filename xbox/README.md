@@ -153,6 +153,11 @@ data files. It may contain local paths and game-derived information. The launche
 log if a long error is still cut off. Xbox child scripts use absolute package paths rather than relying on their
 working directory; this change still needs console verification.
 
+After Play, the game normally writes its startup log to `Longshot\game\logs\longshot_log.txt` on the game drive
+(or `Longshot\game\longshot_log.txt` if the `logs` folder could not be made). It can contain local paths and game-derived
+information. A rejected image-memory commit or an incomplete image read now stops startup with an error instead of
+continuing into uncommitted or incomplete guest memory; this does not establish the cause of an Xbox startup crash.
+
     set LONGSHOT_XBOX=1
     set LONGSHOT_MINGW=<llvm-mingw folder>
     python -I nx2\make_game.py --romfs <dump>\romfs --exefs <dump>\exefs --out <folder> --work <drive>\Longshot\work --no-prepare-shaders

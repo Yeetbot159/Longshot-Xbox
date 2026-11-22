@@ -1707,6 +1707,35 @@ static void memory_notice(void) {
     MessageBoxA(NULL, text, "Longshot", MB_OK | MB_ICONWARNING);
 }
 #endif
+#ifndef A64_MEM_ZERO
+static int load_guest_image(FILE *f, const char *image, size_t *loaded) {
+    if (fseek(f, 0, SEEK_END) != 0) {
+        fprintf(stderr, "cannot size %s\n", image);
+        return 0;
+    }
+    const long long file_size = _ftelli64(f);
+    if (file_size < 0 || fseek(f, 0, SEEK_SET) != 0) {
+        fprintf(stderr, "cannot size or rewind %s\n", image);
+        return 0;
+    }
+    if ((uint64_t)file_size > GUEST_SPACE - IMAGE_BASE || IMAGE_BASE + (uint64_t)file_size != hos_image_end) {
+        fprintf(stderr, "%s: %lld bytes, the lifted code expects %#llx: lift and image do not match\n", image, file_size,
+                (unsigned long long)(hos_image_end - IMAGE_BASE));
+        return 0;
+    }
+    if (file_size && !hos_commit(IMAGE_BASE, (uint64_t)file_size)) {
+        fprintf(stderr, "cannot commit guest memory for %s (%lld bytes)\n", image, file_size);
+        return 0;
+    }
+    *loaded = fread(A64_MEM + IMAGE_BASE, 1, (size_t)file_size, f);
+    if (*loaded != (size_t)file_size) {
+        fprintf(stderr, "cannot read %s: got %zu of %lld bytes\n", image, *loaded, file_size);
+        return 0;
+    }
+    return 1;
+}
+#endif
+
 #ifdef _WIN32
 /* (longshot) On laptops with two GPUs, the drivers run a program on the dedicated one when it exports these (NVIDIA Optimus, AMD
    PowerXpress): without them a laptop could put the game on its integrated GPU, 5 fps (issue 176) */
@@ -1925,15 +1954,10 @@ static int game_main(int argc, char **argv) {
         fprintf(stderr, "cannot open %s\n", image);
         return 1;
     }
-    /* exactly the file's size: a read into "the rest of the guest window" (~4 GB) made Windows commit physical memory
-       for ~2 GB of it before the game ran (the whole heap was resident from the start, ~1.3 GB of it never used) */
-    fseek(f, 0, SEEK_END);
-    const long long file_size = _ftelli64(f);
-    fseek(f, 0, SEEK_SET);
-    if (file_size > 0) hos_commit(IMAGE_BASE, (uint64_t)file_size);
-    size_t n = file_size > 0 && (uint64_t)file_size <= GUEST_SPACE - IMAGE_BASE
-                   ? fread(A64_MEM + IMAGE_BASE, 1, (size_t)file_size, f) : 0;
+    size_t n = 0;
+    const int loaded = load_guest_image(f, image, &n);
     fclose(f);
+    if (!loaded) return 1;
 #endif
     if (IMAGE_BASE + n != hos_image_end) {
         fprintf(stderr, "%s: %zu bytes, the lifted code expects %#llx: lift and image do not match\n", image, n,
