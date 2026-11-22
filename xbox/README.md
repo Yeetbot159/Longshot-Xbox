@@ -218,6 +218,11 @@ In capped PC experiments reporting 4096, 6144, and 8192 MB to the guest instead 
 exited with access violations before capturing a frame. A debugger showed guest null-address accesses in the 6144 and
 8192 MB runs; their underlying cause has not been established. These reported guest-memory values are not an Xbox test.
 
+A temporary read-only CPU-copy experiment on the same capped PC path still captured black frames and recorded no draws.
+The log showed draws skipped because 8-bit index buffers are unsupported by the device; other dispatches were skipped
+for untranslated upscaling networks. The experiment did not preserve GPU writes or memory coherence and was removed;
+it is not a guest-memory fallback. Correctly handling unsupported index buffers and guest-memory access remains necessary.
+
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
 
