@@ -2283,6 +2283,31 @@ const Shader::Info* vertex_info(const Program& p) {
     return p.stages.empty() ? nullptr : &p.stages[0].info;
 }
 
+// Dozen has no extended dynamic state 3, so graphics pipeline libraries stay off (gpl_wanted requires it). The key below
+// therefore includes the state this path bakes, and those keys are not library keys.
+bool legacy_dynamic_state() { return dev.driver_id == VK_DRIVER_ID_MESA_DOZEN; }
+
+bool footprint_draw(const Program& p, const Targets& at) {
+    static const std::vector<uint64_t> footprint = [] {
+        std::vector<uint64_t> v;
+        for (const char* q = getenv("RX_VK_FOOTPRINT"); q && *q;) {
+            char* end;
+            const uint64_t k = strtoull(q, &end, 16);
+            if (end == q) break;
+            v.push_back(k);
+            q = *end ? end + 1 : end;
+        }
+        return v;
+    }();
+    return dump_on() && at.depth && depth_aspect(at.depth_format) &&
+           std::find(footprint.begin(), footprint.end(), p.key) != footprint.end();
+}
+
+float equal_depth_bias() {
+    static const float bias = getenv("RX_VK_EQ_BIAS") ? (float)atof(getenv("RX_VK_EQ_BIAS")) : dev.props.vendorID == 0x8086 ? 64.0f : 0.0f;
+    return bias;
+}
+
 /// A graphics pipeline's key: what is baked into it (the rest is dynamic state)
 uint64_t pipeline_key(const Program& p, const NvnState& s, const Targets& at, VkPrimitiveTopology topo) {
     if (at.n < 0 || at.n > 8) return 0;   // (longshot: at most 8 colour targets)
@@ -2310,6 +2335,16 @@ uint64_t pipeline_key(const Program& p, const NvnState& s, const Targets& at, Vk
     if (!dev.eds3_polygon) key = mix(key, (uint64_t)s.poly.mode);
     if (!dev.eds3_clamp) key = mix(key, (uint64_t)s.depth_clamp);
     if (!dev.eds3_a2c) key = mix(key, (uint64_t)s.ms.a2c);
+    if (legacy_dynamic_state()) {
+        uint64_t ds = 0;
+        std::memcpy(&ds, &s.ds, sizeof s.ds);
+        key = mix(key, ds);
+        key = mix(key, (uint64_t)s.poly.cull | (uint64_t)s.poly.front << 2 |
+                       (uint64_t)s.raster_discard << 3 | (uint64_t)s.restart << 4 |
+                       (uint64_t)(at.depth != nullptr) << 5 | (uint64_t)topo << 8);
+        if (!p.mesh && !p.fallback)
+            for (const auto& stream : s.vstream) key = mix(key, stream.stride);
+    }
     return key;
 }
 
@@ -2329,7 +2364,7 @@ PipeEntry* graphics_pipeline(const Program& p, const NvnState& s, const Targets&
     const uint32_t blend_en = (uint32_t)s.color.blend_en, chmask = s.chmask.mask, poly = (uint32_t)s.poly.mode;
     const uint32_t clamp = s.depth_clamp ? 1u : 0u, a2c = s.ms.a2c ? 1u : 0u;
     for (const PipeFast& f : pipe_fast)
-        if (f.on && f.pe &&
+        if (!legacy_dynamic_state() && f.on && f.pe &&
             pipe_same((uint64_t)(uintptr_t)&p, p.variant, topo_c, (uint32_t)at.samples, at.n, (uint32_t)at.depth_format,
                       formats, s.nvattr, vattr, divs, blend_en, blend, chmask, poly, clamp, a2c, f.prog, f.variant, f.topo,
                       f.samples, f.n, f.depth, f.formats, f.nvattr, f.vattr, f.div, f.blend_en, f.blend, f.chmask, f.poly,
@@ -2534,6 +2569,33 @@ VkPipeline build_graphics(const Program& p, const NvnState& s, const Targets& at
     ms.rasterizationSamples = at.samples;
     ms.alphaToCoverageEnable = s.ms.a2c && !dev.eds3_a2c && !no_a2c();
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    if (legacy_dynamic_state()) {
+        const bool fp = footprint_draw(p, at);
+        const bool depth = at.depth && depth_aspect(at.depth_format);
+        const bool stencil = at.depth && has_stencil(at.depth_format);
+        vp.viewportCount = vp.scissorCount = 1;
+        ia.primitiveRestartEnable = !p.mesh && s.restart && topo != VK_PRIMITIVE_TOPOLOGY_POINT_LIST &&
+            topo != VK_PRIMITIVE_TOPOLOGY_LINE_LIST && topo != VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST &&
+            topo != VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+        rs.cullMode = sw().no_cull || fp ? VK_CULL_MODE_NONE
+                    : s.poly.cull == NVN_FACE_FRONT ? VK_CULL_MODE_FRONT_BIT
+                    : s.poly.cull == NVN_FACE_BACK ? VK_CULL_MODE_BACK_BIT
+                    : s.poly.cull == NVN_FACE_FRONT_AND_BACK ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_NONE;
+        rs.frontFace = s.poly.front == NVN_FRONT_FACE_CCW ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+        rs.depthBiasEnable = VK_TRUE;
+        rs.rasterizerDiscardEnable = s.raster_discard && !sw().ignore_discard;
+        ds.depthTestEnable = !sw().no_depth && depth && s.ds.dt;
+        ds.depthWriteEnable = !sw().no_depth && depth && s.ds.dw;
+        ds.depthCompareOp = compare_op(s.ds.df);
+        if (fp) ds.depthTestEnable = ds.depthWriteEnable = VK_TRUE, ds.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+        if (equal_depth_bias() > 0 && ds.depthTestEnable && !ds.depthWriteEnable && ds.depthCompareOp == VK_COMPARE_OP_EQUAL)
+            ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+        ds.stencilTestEnable = stencil && s.ds.st;
+        ds.front.failOp = stencil_op(s.ds.fail_f), ds.front.passOp = stencil_op(s.ds.zpass_f);
+        ds.front.depthFailOp = stencil_op(s.ds.zfail_f), ds.front.compareOp = compare_op(s.ds.sf_f);
+        ds.back.failOp = stencil_op(s.ds.fail_b), ds.back.passOp = stencil_op(s.ds.zpass_b);
+        ds.back.depthFailOp = stencil_op(s.ds.zfail_b), ds.back.compareOp = compare_op(s.ds.sf_b);
+    }
     VkPipelineColorBlendAttachmentState cb[8]{};
     for (int i = 0; i < at.n; i++) {
         const nvn_blend_st& b = s.blend[i];
@@ -2557,7 +2619,11 @@ VkPipeline build_graphics(const Program& p, const NvnState& s, const Targets& at
         VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE, VK_DYNAMIC_STATE_STENCIL_OP,
         VK_DYNAMIC_STATE_DEPTH_BIAS_ENABLE, VK_DYNAMIC_STATE_RASTERIZER_DISCARD_ENABLE, VK_DYNAMIC_STATE_LINE_WIDTH,
         VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE};
-    if (!p.mesh) {
+    if (legacy_dynamic_state())
+        dyn = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+               VK_DYNAMIC_STATE_STENCIL_REFERENCE, VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
+               VK_DYNAMIC_STATE_STENCIL_WRITE_MASK, VK_DYNAMIC_STATE_DEPTH_BIAS, VK_DYNAMIC_STATE_LINE_WIDTH};
+    if (!p.mesh && !legacy_dynamic_state()) {
         dyn.push_back(VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY);
         dyn.push_back(VK_DYNAMIC_STATE_PRIMITIVE_RESTART_ENABLE);
         // The fallback vertex stage reads records by vertex index, with no vertex buffers bound.
@@ -4871,19 +4937,7 @@ void dynamic_state(VkCommandBuffer cmd, const NvnState& s, const Targets& at, Vk
     std::memset(&d, 0, sizeof d);   // (padding compared too)
     // (RX_VK_FOOTPRINT=<key>,...: those programs' draws write depth wherever they rasterize, both faces, whatever is
     // there already: with RX_VK_DUMP_EACH, each one's footprint (diagnostics))
-    static const std::vector<uint64_t> footprint = [] {
-        std::vector<uint64_t> v;
-        for (const char* q = getenv("RX_VK_FOOTPRINT"); q && *q;) {
-            char* end;
-            const uint64_t k = strtoull(q, &end, 16);
-            if (end == q) break;
-            v.push_back(k);
-            q = *end ? end + 1 : end;
-        }
-        return v;
-    }();
-    const bool fp = dump_on() && at.depth && depth_aspect(at.depth_format) && cur_program && !footprint.empty() &&
-                    std::find(footprint.begin(), footprint.end(), cur_program->key) != footprint.end();
+    const bool fp = cur_program && footprint_draw(*cur_program, at);
     // the viewport upside down (negative height): NVN's NDC has +y up, Vulkan's down
     float vx = s.viewport[0][0], vy = s.viewport[0][1], vw = s.viewport[0][2], vh = s.viewport[0][3];
     if (vw == 0.0f && vh == 0.0f) vx = 0, vy = 0, vw = (float)at.width, vh = (float)at.height;
@@ -4951,7 +5005,7 @@ void dynamic_state(VkCommandBuffer cmd, const NvnState& s, const Targets& at, Vk
     {   // (longshot) A colour pass after a depth pass tests EQUAL against what another program wrote. Intel's compiler does not give two
         // programs the same position to the last bit, and the ground came out in holes: the sky through them, a white forest.
         // A small margin towards the camera instead. RX_VK_EQ_BIAS=<units>, 0: as the game asks
-        static const float eq_bias = getenv("RX_VK_EQ_BIAS") ? (float)atof(getenv("RX_VK_EQ_BIAS")) : dev.props.vendorID == 0x8086 ? 64.0f : 0.0f;
+        const float eq_bias = equal_depth_bias();
         if (eq_bias > 0 && d.dt && !d.dw && d.dop == VK_COMPARE_OP_EQUAL) {
             d.dop = VK_COMPARE_OP_LESS_OR_EQUAL;
             d.bias_en = VK_TRUE;
@@ -4989,8 +5043,14 @@ void dynamic_state(VkCommandBuffer cmd, const NvnState& s, const Targets& at, Vk
         static std::string last;
         if (last != line) last = line, logf("vk: dump-st %03d %s", dump_seq(), line);
     }
-    if (DYN_CHANGED(vp)) vkCmdSetViewportWithCount(cmd, 1, &d.vp);
-    if (DYN_CHANGED(sc)) vkCmdSetScissorWithCount(cmd, 1, &d.sc);
+    if (DYN_CHANGED(vp)) {
+        if (legacy_dynamic_state()) vkCmdSetViewport(cmd, 0, 1, &d.vp);
+        else vkCmdSetViewportWithCount(cmd, 1, &d.vp);
+    }
+    if (DYN_CHANGED(sc)) {
+        if (legacy_dynamic_state()) vkCmdSetScissor(cmd, 0, 1, &d.sc);
+        else vkCmdSetScissorWithCount(cmd, 1, &d.sc);
+    }
     if (DYN_CHANGED(blend)) vkCmdSetBlendConstants(cmd, d.blend);
     if (DYN_CHANGED(sref)) {
         vkCmdSetStencilReference(cmd, VK_STENCIL_FACE_FRONT_BIT, d.sref[0]);
@@ -5004,24 +5064,30 @@ void dynamic_state(VkCommandBuffer cmd, const NvnState& s, const Targets& at, Vk
         vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_BIT, d.swm[0]);
         vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_BACK_BIT, d.swm[1]);
     }
-    if (DYN_CHANGED(bias)) vkCmdSetDepthBias(cmd, d.bias[0], d.bias[1], d.bias[2]);
-    if (DYN_CHANGED(bias_en)) vkCmdSetDepthBiasEnable(cmd, d.bias_en);
-    if (!last_dyn_valid) vkCmdSetLineWidth(cmd, 1.0f), vkCmdSetDepthBoundsTestEnable(cmd, VK_FALSE);
-    if (DYN_CHANGED(cull)) vkCmdSetCullMode(cmd, d.cull);
-    if (DYN_CHANGED(front)) vkCmdSetFrontFace(cmd, d.front);
-    if (!mesh) {
-        if (DYN_CHANGED(topo)) vkCmdSetPrimitiveTopology(cmd, d.topo);
-        if (DYN_CHANGED(restart) || last_dyn.topo == VK_PRIMITIVE_TOPOLOGY_MAX_ENUM) vkCmdSetPrimitiveRestartEnable(cmd, d.restart);
+    if (DYN_CHANGED(bias) || (legacy_dynamic_state() && DYN_CHANGED(bias_en))) {
+        const bool bias = !legacy_dynamic_state() || d.bias_en;
+        vkCmdSetDepthBias(cmd, bias ? d.bias[0] : 0, bias ? d.bias[1] : 0, bias ? d.bias[2] : 0);
     }
-    if (DYN_CHANGED(dt)) vkCmdSetDepthTestEnable(cmd, d.dt);
-    if (DYN_CHANGED(dw)) vkCmdSetDepthWriteEnable(cmd, d.dw);
-    if (DYN_CHANGED(dop)) vkCmdSetDepthCompareOp(cmd, d.dop);
-    if (DYN_CHANGED(st)) vkCmdSetStencilTestEnable(cmd, d.st);
-    if (DYN_CHANGED(sops) || DYN_CHANGED(scmpop)) {
-        vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_FRONT_BIT, d.sops[0][0], d.sops[0][1], d.sops[0][2], d.scmpop[0]);
-        vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_BACK_BIT, d.sops[1][0], d.sops[1][1], d.sops[1][2], d.scmpop[1]);
+    if (!last_dyn_valid) vkCmdSetLineWidth(cmd, 1.0f);
+    if (!legacy_dynamic_state()) {
+        if (DYN_CHANGED(bias_en)) vkCmdSetDepthBiasEnable(cmd, d.bias_en);
+        if (!last_dyn_valid) vkCmdSetDepthBoundsTestEnable(cmd, VK_FALSE);
+        if (DYN_CHANGED(cull)) vkCmdSetCullMode(cmd, d.cull);
+        if (DYN_CHANGED(front)) vkCmdSetFrontFace(cmd, d.front);
+        if (!mesh) {
+            if (DYN_CHANGED(topo)) vkCmdSetPrimitiveTopology(cmd, d.topo);
+            if (DYN_CHANGED(restart) || last_dyn.topo == VK_PRIMITIVE_TOPOLOGY_MAX_ENUM) vkCmdSetPrimitiveRestartEnable(cmd, d.restart);
+        }
+        if (DYN_CHANGED(dt)) vkCmdSetDepthTestEnable(cmd, d.dt);
+        if (DYN_CHANGED(dw)) vkCmdSetDepthWriteEnable(cmd, d.dw);
+        if (DYN_CHANGED(dop)) vkCmdSetDepthCompareOp(cmd, d.dop);
+        if (DYN_CHANGED(st)) vkCmdSetStencilTestEnable(cmd, d.st);
+        if (DYN_CHANGED(sops) || DYN_CHANGED(scmpop)) {
+            vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_FRONT_BIT, d.sops[0][0], d.sops[0][1], d.sops[0][2], d.scmpop[0]);
+            vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_BACK_BIT, d.sops[1][0], d.sops[1][1], d.sops[1][2], d.scmpop[1]);
+        }
+        if (DYN_CHANGED(discard)) vkCmdSetRasterizerDiscardEnable(cmd, d.discard);
     }
-    if (DYN_CHANGED(discard)) vkCmdSetRasterizerDiscardEnable(cmd, d.discard);
     if (dev.eds3_polygon && DYN_CHANGED(poly)) vkCmdSetPolygonModeEXT(cmd, d.poly);
     if (dev.eds3_clamp && DYN_CHANGED(clamp)) vkCmdSetDepthClampEnableEXT(cmd, d.clamp);
     if (dev.eds3_a2c && DYN_CHANGED(a2c)) vkCmdSetAlphaToCoverageEnableEXT(cmd, d.a2c);
@@ -7212,6 +7278,152 @@ static bool fallback_list_held(uint64_t list) {
     return false;
 }
 
+#include "shaders/u8_widen_comp_spv.h"
+
+constexpr uint64_t kU8MaxIndices = 1u << 20;
+
+uint64_t u8_indices_read(const DrawArgs& d) {
+    if (!d.indirect) {
+        if (d.count <= 0) return 0;
+        const uint64_t n = (uint64_t)d.count;
+        return n <= kU8MaxIndices ? n : 0;
+    }
+    if (d.max < 0 || d.stride < 0) return 0;
+    const uint64_t stride = (uint64_t)std::max(d.stride, 20);
+    uint32_t records = (uint32_t)std::min(std::max(d.max, 1), 4096);
+    if (uint32_t n = 0; d.count_addr && memory_read_as_submitted(d.count_addr, &n, 4))
+        records = std::min(records, n);
+    if (!records) return 0;
+    uint8_t raw[20];
+    uint64_t end = 0;
+    for (uint32_t r = 0; r < records; r++) {
+        const uint64_t offset = (uint64_t)r * stride;
+        if (d.indirect > UINT64_MAX - offset || !memory_read_as_submitted(d.indirect + offset, raw, 20)) return 0;
+        uint32_t w[5]{};
+        std::memcpy(w, raw, 20);
+        if (w[0] && w[1]) {
+            end = std::max(end, (uint64_t)w[2] + w[0]);
+            if (end > kU8MaxIndices) return 0;
+        }
+    }
+    return end;
+}
+
+bool u8_widen_cpu(const DrawArgs& d, uint64_t n, bool restart, VkBuffer& buffer, VkDeviceSize& offset) {
+    std::vector<uint8_t> raw((size_t)n);
+    if (!memory_read_as_submitted(d.ibuf, raw.data(), n)) return false;
+    const uint64_t at = stream_alloc(n * 2, 4);
+    if (at == UINT64_MAX || !cur || !cur->mapped || !cur->stream) return false;
+    uint16_t* out = reinterpret_cast<uint16_t*>(cur->mapped + at);
+    for (uint64_t i = 0; i < n; i++) {
+        const uint32_t v = raw[(size_t)i];
+        out[i] = (restart && v == 0xFFu) ? 0xFFFFu : (uint16_t)v;
+    }
+    buffer = cur->stream;
+    offset = at;
+    static std::atomic<bool> told{false};
+    if (!told.exchange(true)) logf("vk: 8-bit indices are widened to 16 bits on the CPU");
+    return true;
+}
+
+struct U8WidenPush {
+    uint64_t src;
+    uint64_t dst;
+    uint32_t count;
+    uint32_t restart;
+    uint32_t src_byte;
+    uint32_t pad;
+};
+static_assert(sizeof(U8WidenPush) == 32, "u8 widen push constant");
+
+struct U8WidenSlot { VkBuffer buffer = VK_NULL_HANDLE; VmaAllocation alloc = nullptr; uint64_t size = 0, used = 0, value = ~0ull; };
+thread_local std::vector<U8WidenSlot> u8_widen_slots;
+
+bool u8_widen_room(uint64_t bytes, VkBuffer& buffer, uint64_t& off) {
+    bytes = (bytes + 15ull) & ~15ull;
+    for (U8WidenSlot& s : u8_widen_slots) {
+        if (s.value != rec_value) s.used = 0, s.value = rec_value;
+        if (s.buffer && s.used + bytes <= s.size) {
+            off = s.used;
+            s.used += bytes;
+            buffer = s.buffer;
+            return true;
+        }
+    }
+    U8WidenSlot s;
+    s.size = std::max<uint64_t>(bytes, 4ull << 20);
+    const VkBufferUsageFlags usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    if (!create_device_buffer(s.size, usage, s.buffer, s.alloc)) return false;
+    s.used = bytes;
+    s.value = rec_value;
+    off = 0;
+    buffer = s.buffer;
+    u8_widen_slots.push_back(s);
+    return true;
+}
+
+bool u8_widen_gpu(VkCommandBuffer cmd, const DrawArgs& d, uint64_t n, bool restart, VkBuffer& buffer, VkDeviceSize& offset) {
+    static VkPipeline pipe = VK_NULL_HANDLE;
+    static VkPipelineLayout layout = VK_NULL_HANDLE;
+    static std::once_flag once;
+    static bool ready = false;
+    std::call_once(once, [] {
+        if (!dev.vk12.bufferDeviceAddress) return;
+        VkPushConstantRange range{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(U8WidenPush)};
+        VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        li.pushConstantRangeCount = 1;
+        li.pPushConstantRanges = &range;
+        if (vkCreatePipelineLayout(dev.device, &li, nullptr, &layout) != VK_SUCCESS) return;
+        VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        mi.codeSize = sizeof U8_WIDEN_COMP_SPV;
+        mi.pCode = U8_WIDEN_COMP_SPV;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        if (vkCreateShaderModule(dev.device, &mi, nullptr, &mod) != VK_SUCCESS) return;
+        VkPipelineShaderStageCreateInfo stage{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = mod;
+        stage.pName = "main";
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        ci.stage = stage;
+        ci.layout = layout;
+        ready = vkCreateComputePipelines(dev.device, VK_NULL_HANDLE, 1, &ci, nullptr, &pipe) == VK_SUCCESS && pipe;
+        vkDestroyShaderModule(dev.device, mod, nullptr);
+        logf("vk: 8-bit indices the GPU wrote are widened on the GPU: %s", ready ? "ready" : "not created");
+    });
+    if (!ready) return false;
+    const BufferRef src = gpu_buffer_bind(d.ibuf, n, false);
+    if (!src) return false;
+    const uint64_t src_addr = fallback_buffer_address(src.buffer);
+    if (!src_addr || src.offset > 0xffffffffull) return false;
+    VkBuffer dst = VK_NULL_HANDLE;
+    uint64_t dst_off = 0;
+    if (!u8_widen_room(n * 4, dst, dst_off)) return false;
+    const uint64_t dst_addr = fallback_buffer_address(dst);
+    if (!dst_addr) return false;
+    VkMemoryBarrier2 in{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    in.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    in.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+    in.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    in.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.memoryBarrierCount = 1;
+    di.pMemoryBarriers = &in;
+    vkCmdPipelineBarrier2(cmd, &di);
+    const U8WidenPush push{src_addr, dst_addr + dst_off, (uint32_t)n, restart ? 1u : 0u, (uint32_t)src.offset, 0};
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipe);
+    vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof push, &push);
+    vkCmdDispatch(cmd, (uint32_t)((n + 63) / 64), 1, 1);
+    in.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    in.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    in.dstStageMask = VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+    in.dstAccessMask = VK_ACCESS_2_INDEX_READ_BIT;
+    vkCmdPipelineBarrier2(cmd, &di);
+    buffer = dst;
+    offset = dst_off;
+    return true;
+}
+
 void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     Pass& ps = pass();   // (once: the accessor is a call and a thread-local read at each use. The same object for the thread's life: draw_begin_recording resets it in place)
     PROF_HOT(PROF_DRAW);
@@ -7910,7 +8122,8 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         if (!last_vb_valid || std::memcmp(vbufs, last_vb.b, sizeof vbufs) || std::memcmp(voffs, last_vb.o, sizeof voffs) ||
             std::memcmp(vsizes, last_vb.z, sizeof vsizes) || std::memcmp(vstrides, last_vb.s, sizeof vstrides)) {
             FINE_N(FC_VBIND, 1);
-            vkCmdBindVertexBuffers2(cmd, 0, 16, vbufs, voffs, vsizes, vstrides);
+            if (legacy_dynamic_state()) vkCmdBindVertexBuffers(cmd, 0, 16, vbufs, voffs);
+            else vkCmdBindVertexBuffers2(cmd, 0, 16, vbufs, voffs, vsizes, vstrides);
             std::memcpy(last_vb.b, vbufs, sizeof vbufs), std::memcpy(last_vb.o, voffs, sizeof voffs);
             std::memcpy(last_vb.z, vsizes, sizeof vsizes), std::memcpy(last_vb.s, vstrides, sizeof vstrides);
             last_vb_valid = true;
@@ -7962,12 +8175,31 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         st_draws++, ps.draws++;
         return;
     }
+    VkBuffer wide_buf = VK_NULL_HANDLE;
+    VkDeviceSize wide_off = 0;
+    VkIndexType wide_type = itype;
     if (d.indexed && d.itype == 0 && !dev.index_uint8) {
-        static std::atomic<int> logged{0};
-        if (logged++ < 8)
-            logf("vk: 8-bit indexed draw skipped: unsupported by device, primitive %d, count %d%s, restart %d",
-                 d.prim, d.count, d.indirect ? " indirect" : "", (int)s.restart);
-        SKIP_HERE();
+        const uint64_t n = u8_indices_read(d);
+        const uint64_t guest = d.ibuf < (1ull << 40) ? d.ibuf : host->gpu_guest(d.ibuf);
+        const bool pending = n && guest && memory_gpu_write_pending(guest, n);
+        const bool restart = s.restart != 0;
+        bool gpu = false;
+        bool widened = n && !pending && u8_widen_cpu(d, n, restart, wide_buf, wide_off);
+        if (!widened && n) {
+            const bool opened = pass().open;
+            if (opened) end_pass(cmd);   // (the compute widen cannot run inside the rendering pass)
+            widened = u8_widen_gpu(cmd, d, n, restart, wide_buf, wide_off);
+            gpu = widened;
+            if (opened) begin_pass(cmd, at);
+        }
+        if (!widened) {
+            static std::atomic<int> logged{0};
+            if (logged++ < 8)
+                logf("vk: 8-bit indexed draw skipped: primitive %d, count %d%s, restart %d",
+                     d.prim, d.count, d.indirect ? " indirect" : "", (int)s.restart);
+            SKIP_HERE();
+        }
+        wide_type = gpu ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
     }
     if (d.indirect) {
         // (longshot) the records the draw reads, at the stride it reads them with (20 for indexed draws), all bound; a
@@ -7978,9 +8210,12 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         BufferRef cnt = d.count_addr ? gpu_buffer_bind(d.count_addr, 4, false) : BufferRef{};
         if (!args) SKIP_HERE();
         if (d.indexed) {
-            BufferRef ib = gpu_buffer_bind(d.ibuf, 4, false);
-            if (!ib) SKIP_HERE();
-            bind_index(cmd, ib.buffer, ib.offset, itype);
+            if (wide_buf) bind_index(cmd, wide_buf, wide_off, wide_type);
+            else {
+                BufferRef ib = gpu_buffer_bind(d.ibuf, 4, false);
+                if (!ib) SKIP_HERE();
+                bind_index(cmd, ib.buffer, ib.offset, itype);
+            }
             occ.issue();
             if (cnt) vkCmdDrawIndexedIndirectCount(cmd, args.buffer, args.offset, cnt.buffer, cnt.offset, std::max(d.max, 1), ind_stride);
             else vkCmdDrawIndexedIndirect(cmd, args.buffer, args.offset, std::max(d.max, 1), ind_stride);
@@ -7994,10 +8229,15 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
         BufferRef ib;
         {
             FINE_SCOPE(FT_VERTEX);
-            ib = gpu_buffer_bind(d.ibuf, (uint64_t)std::max(d.count, 1) * unit, false);
-            if (!ib) SKIP_HERE();
-            FINE_N(FC_IBIND, 1);
-            bind_index(cmd, ib.buffer, ib.offset, itype);
+            if (wide_buf) {
+                FINE_N(FC_IBIND, 1);
+                bind_index(cmd, wide_buf, wide_off, wide_type);
+            } else {
+                ib = gpu_buffer_bind(d.ibuf, (uint64_t)std::max(d.count, 1) * unit, false);
+                if (!ib) SKIP_HERE();
+                FINE_N(FC_IBIND, 1);
+                bind_index(cmd, ib.buffer, ib.offset, itype);
+            }
         }
         FINE_SCOPE(FT_DRAWCALL);
         occ.issue();

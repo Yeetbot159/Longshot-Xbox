@@ -3294,6 +3294,7 @@ void invalidate(uint64_t gpu, uint64_t size) {
                 // (what the CPU is about to read: the range's newest write-back, waited for above unless read late)
                 rb_range_age(gpu, size, late ? std::min<uint64_t>(v, completed()) : v);
             }
+            memory_flush_copy_pools(completed());   // (a coherent copy's GPU writes are in guest memory before the CPU reads them)
             if (++calls % 3000 == 0) {
                 if (log_ranges) rb_ranges_log();
                 const int64_t n = waited.exchange(0);

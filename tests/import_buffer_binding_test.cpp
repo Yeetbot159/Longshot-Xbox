@@ -152,6 +152,7 @@ bool import_dma_buf_pieces(uint64_t lo, uint64_t hi, uint64_t, Pool& p) {
     buffers.emplace(p.buffer, DmaMemory); bound_buffers.insert(p.buffer); memories.insert(p.memory);
     return true;
 }
+bool copy_pool_make(uint64_t, uint64_t, Pool&) { return false; }
 #define fscanf mock_fscanf
 /* ACTUAL */
 #undef fscanf

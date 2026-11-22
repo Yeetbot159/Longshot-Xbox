@@ -105,6 +105,12 @@ struct Pool {
     uint64_t retired_epoch = 0;
     int64_t retired_ms = 0;      // (retired: when, import_now_ms; where its import waits before going back, the wait counts from here)
     bool prefetched = false;     // (amd-fix) imported ahead by the background thread, not bound yet
+    // (Dozen) host-pointer import cannot alias guest memory here: a coherent mapped copy stands in for the import.
+    // The GPU reads and writes the copy; CPU writes are published in before a submit and GPU writes are copied back
+    // after the submission that made them is done. Not an external-memory import.
+    bool copied = false;
+    void* copy_map = nullptr;
+    uint32_t copy_gen = 0;
     // (longshot, mirror_trim.h) mostly outside every game pool since this submission (0: not); how often its range was trimmed
     // before; and, retired by a trim, its mirror's contents wanted by each of the pools made from its live parts
     uint64_t dead_since = 0;
@@ -402,6 +408,7 @@ bool import_dma_buf(uint64_t lo, uint64_t hi, Pool& p) {
 }
 #endif
 
+bool copy_pool_make(uint64_t lo, uint64_t hi, Pool& p);   // (coherent copy when a host-pointer import cannot alias guest memory)
 bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     import_cooling = false;
     import_result = VK_SUCCESS;
@@ -427,6 +434,10 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
                    (caps.externalMemoryProperties.compatibleHandleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT);
         }();
         if (!host_buffer_supported) {
+            // Mesa's compatible handles are D3D12_HEAP and OPAQUE_WIN32, and a shared buffer's memory types exclude
+            // every host-visible type, so the host-pointer bits and the buffer bits do not meet. A mapped copy is the
+            // alias. It is not an external import and it does not commit guest pages.
+            if (copy_pool_make(lo, hi, p)) return true;
             host_import_failed(lo, hi, "Dozen host buffer import is not supported", VK_ERROR_FEATURE_NOT_PRESENT);
             return false;
         }
@@ -516,6 +527,7 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
         }
         destroy_import_buffer(p.buffer);
         p.buffer = VK_NULL_HANDLE;
+        if (type == UINT32_MAX && copy_pool_make(lo, hi, p)) return true;
         host_import_failed(lo, hi, req.size > bytes ? "buffer memory requirement exceeds guest range" :
                            "no compatible host-visible coherent memory type");
         return false;
@@ -1417,7 +1429,12 @@ inline SubmittedPage& submitted_page_for(uint64_t page) {   // (a page and its n
 }
 
 void late_fix_cpu_read(uint32_t page, VkBuffer buffer, uint8_t* slot);   // (pools_mu held: the late pages' fix, below)
+void flush_copies_locked(uint64_t completed);   // (coherent copies: defined with them, below)
 bool memory_read_as_submitted(uint64_t gpu, void* dst, uint64_t n) {
+    {
+        std::lock_guard lk(pools_mu);
+        flush_copies_locked(mem_completed);   // (GPU writes in a finished submission are in the copy until this puts them in guest memory)
+    }
     // (once a capture exists, every uniform word took pools_mu to ask whether its page was in one. A page in none keeps
     // that answer until a stamp or a new capture)
     if (!host->gpu_read(gpu, dst, n)) return false;
@@ -1627,6 +1644,11 @@ uint64_t memory_writeback_value(uint64_t guest, uint64_t size, bool* ever, uint6
     }
     return v;
 }
+bool memory_gpu_write_pending(uint64_t guest, uint64_t size) {
+    bool ever = false;
+    const uint64_t v = memory_writeback_value(guest, size, &ever);
+    return ever && v > mem_completed;
+}
 
 /// A copy that fails instead of faulting on a page unmapped meanwhile (structured exception handling: the common case
 /// costs a memcpy; ReadProcessMemory per page was ~2.3 us each). Not inlined, and the copy a call: without
@@ -1703,6 +1725,182 @@ bool guarded_copy(void* dst, const void* src, size_t n) {
     return true;
 }
 #endif
+
+// ---- coherent copies, where a host-pointer import cannot alias guest memory ----
+// Dozen's external host-allocation buffers are shared resources. Mesa reports D3D12-heap handles for them and leaves
+// host-visible memory types out of a shared buffer's mask, so the pointer's type and the buffer's type do not meet.
+// The copy is an ordinary host-visible coherent buffer. CPU writes are published into it before the GPU reads it, and
+// GPU writes are copied back to guest memory once that submission has completed. A read-only snapshot is not enough.
+uint64_t copy_bytes = 0;
+// map and base are the mapping the GPU wrote, kept until that mapping is unmapped. gen is gen_now when the write was
+// noted: a CPU stamp newer than that is left in guest memory.
+struct CopyFlush { void* map; uint64_t base, lo, hi, value; uint32_t gen; };
+std::vector<CopyFlush> copy_flushes;
+
+uint64_t copy_budget_bytes() {
+    static const uint64_t b = [] {
+        const char* e = getenv("RX_VK_COPY_MB");
+        const int mb = e && *e ? std::max(0, atoi(e)) : 384;
+        logf("vk: coherent copies of guest pools that cannot be imported: %s",
+             mb ? "on" : "off");
+        if (mb) logf("vk: copy budget %d MB (RX_VK_COPY_MB)", mb);
+        return (uint64_t)mb << 20;
+    }();
+    return b;
+}
+uint32_t copy_memory_type(uint32_t bits) {
+    const uint32_t coherent = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    uint32_t host = UINT32_MAX, device = UINT32_MAX;
+    for (uint32_t i = 0; i < dev.memory.memoryTypeCount && i < 32; i++) {
+        if ((bits & (1u << i)) == 0) continue;
+        const VkMemoryPropertyFlags f = dev.memory.memoryTypes[i].propertyFlags;
+        if ((f & coherent) != coherent) continue;
+        if ((f & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && device == UINT32_MAX) device = i;
+        else if (host == UINT32_MAX) host = i;
+    }
+    return device != UINT32_MAX ? device : host;
+}
+void fill_copy_from_guest(void* map, uint64_t lo, uint64_t bytes) {
+    uint8_t* dst = (uint8_t*)map;
+    uint8_t* src = host->guest_base() + lo;
+    std::memset(dst, 0, (size_t)bytes);
+    if (guarded_copy(dst, src, (size_t)bytes)) return;
+    for (uint64_t off = 0; off < bytes; off += 4096) {
+        const uint64_t n = std::min<uint64_t>(4096, bytes - off);
+        if (!guarded_copy(dst + off, src + off, (size_t)n)) std::memset(dst + off, 0, (size_t)n);
+    }
+}
+namespace {
+bool copy_pool_make(uint64_t lo, uint64_t hi, Pool& p) {
+    const uint64_t bytes = hi - lo;
+    const uint64_t budget = copy_budget_bytes();
+    if (!bytes || !budget || bytes > budget || copy_bytes + bytes > budget) {
+        static int logged;
+        if (logged++ < 8)
+            logf("vk: copy pool %#llx..%#llx (%llu MB) does not fit the %llu MB copy budget (%llu MB in use)",
+                 (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)(bytes >> 20),
+                 (unsigned long long)(budget >> 20), (unsigned long long)(copy_bytes >> 20));
+        return false;
+    }
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = bytes;
+    bi.usage = guest_buffer_usage();
+    VkBuffer buffer = VK_NULL_HANDLE;
+    if (vkCreateBuffer(dev.device, &bi, nullptr, &buffer) != VK_SUCCESS) return false;
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(dev.device, buffer, &req);
+    const uint32_t type = copy_memory_type(req.memoryTypeBits);
+    if (type == UINT32_MAX) {
+        destroy_import_buffer(buffer);
+        static int logged;
+        if (logged++ < 4) logf("vk: copy pool has no host-visible coherent memory type (buffer types %#x)", req.memoryTypeBits);
+        return false;
+    }
+    VkMemoryAllocateFlagsInfo fl{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO};
+    fl.flags = dev.vk12.bufferDeviceAddress ? VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT : 0;
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.pNext = dev.vk12.bufferDeviceAddress ? &fl : nullptr;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    if (vkAllocateMemory(dev.device, &ai, nullptr, &memory) != VK_SUCCESS) {
+        destroy_import_buffer(buffer);
+        return false;
+    }
+    if (vkBindBufferMemory(dev.device, buffer, memory, 0) != VK_SUCCESS) {
+        destroy_import_buffer(buffer);
+        vkFreeMemory(dev.device, memory, nullptr);
+        return false;
+    }
+    void* map = nullptr;
+    if (vkMapMemory(dev.device, memory, 0, req.size, 0, &map) != VK_SUCCESS || !map) {
+        destroy_import_buffer(buffer);
+        vkFreeMemory(dev.device, memory, nullptr);
+        return false;
+    }
+    const uint32_t filled_gen = gen_now;   // (a stamp during the fill stays newer than this, so the next publish copies it)
+    fill_copy_from_guest(map, lo, bytes);
+    p = Pool{};
+    p.lo = lo, p.hi = hi, p.buffer = buffer, p.memory = memory, p.copy_map = map, p.copied = true;
+    p.copy_gen = filled_gen;
+    p.mstate = Pool::MIRROR_REFUSED;
+    p.address = dev.vk12.bufferDeviceAddress ? queried_buffer_address(buffer) : 0;
+    copy_bytes += bytes;
+    static int n = 0;
+    if (n++ < 6 || n % 32 == 0)
+        logf("vk: copy pool %#llx..%#llx (%llu MB) type %u flags %#x, %llu MB of copies",
+             (unsigned long long)lo, (unsigned long long)hi, (unsigned long long)(bytes >> 20), type,
+             dev.memory.memoryTypes[type].propertyFlags, (unsigned long long)(copy_bytes >> 20));
+    return true;
+}
+} // namespace
+void publish_copy(Pool& p) {   // (pools_mu held: CPU pages newer than the copy)
+    if (!p.copied || !p.copy_map || p.copy_gen >= gen_now) return;
+    uint8_t* guest = host->guest_base();
+    uint8_t* dst = (uint8_t*)p.copy_map;
+    const uint64_t end_page = std::min((p.hi + 4095) >> kPageShift, kPages);
+    for (uint64_t page = p.lo >> kPageShift; page < end_page;) {
+        if (page >= kPages) break;
+        if (region_gen[page / kRegionPages] <= p.copy_gen) {
+            page = std::min(end_page, (page / kRegionPages + 1) * kRegionPages);
+            continue;
+        }
+        if (page_gen(page) > p.copy_gen) {
+            const uint64_t a = std::max(page << kPageShift, p.lo);
+            const uint64_t b = std::min((page + 1) << kPageShift, p.hi);
+            if (!guarded_copy(dst + (a - p.lo), guest + a, (size_t)(b - a)))
+                std::memset(dst + (a - p.lo), 0, (size_t)(b - a));
+        }
+        page++;
+    }
+    p.copy_gen = gen_now;
+}
+void note_copy_write(Pool& p, uint64_t off, uint64_t size) {   // (pools_mu held)
+    if (!p.copied || !size || off >= p.hi - p.lo) return;
+    const uint64_t n = std::min(size, p.hi - p.lo - off);
+    copy_flushes.push_back({p.copy_map, p.lo, off, off + n, mem_rec_value, gen_now});
+    wb_pages_note(p.lo + off, p.lo + off + n, mem_rec_value, 0);
+}
+void flush_copy_range(void* map, uint64_t base, uint64_t lo, uint64_t hi, uint32_t noted) {
+    if (!map || hi <= lo || base + hi < base) return;
+    uint8_t* guest = host->guest_base();
+    uint8_t* src = (uint8_t*)map;
+    for (uint64_t at = lo; at < hi;) {
+        const uint64_t guest_at = base + at;
+        const uint64_t page = guest_at >> kPageShift;
+        if (page >= kPages) break;
+        const uint64_t page_hi = std::min(base + hi, (page + 1) << kPageShift);
+        const uint64_t page_end = page_hi - base;
+        if (page_gen(page) <= noted)
+            guarded_copy(guest + guest_at, src + at, (size_t)(page_end - at));
+        at = page_end;
+    }
+}
+void flush_copies_locked(uint64_t completed) {
+    for (auto it = copy_flushes.begin(); it != copy_flushes.end();) {
+        if (!it->map || it->value > completed) { ++it; continue; }
+        flush_copy_range(it->map, it->base, it->lo, it->hi, it->gen);
+        it = copy_flushes.erase(it);
+    }
+}
+void copy_pool_inherit(Pool& p, const std::vector<uint64_t>& overlapped) {
+    if (!p.copied || !p.copy_map) return;
+    for (uint64_t k : overlapped) {
+        auto o = imported.find(k);
+        if (o == imported.end() || !o->second.copied || !o->second.copy_map) continue;
+        const uint64_t a = std::max(p.lo, o->second.lo);
+        const uint64_t b = std::min(p.hi, o->second.hi);
+        if (a < b)
+            std::memcpy((uint8_t*)p.copy_map + (a - p.lo), (uint8_t*)o->second.copy_map + (a - o->second.lo), (size_t)(b - a));
+    }
+}
+void unmap_copy(Pool& p) {
+    // vkFreeMemory unmaps. vkUnmapMemory is not in the loaded entry points.
+    if (p.copied) copy_bytes -= std::min(copy_bytes, p.hi > p.lo ? p.hi - p.lo : 0);
+    p.copy_map = nullptr;
+    p.copied = false;
+}
+
 // ---- a capture's copies: on the submitting thread and two helpers, four from 12 CPU threads (RX_VK_CAPTURE_THREADS=<n>, 0-4): ~9 MB of the
 // game's dynamic data a submit, four submits a frame, ~1.4 ms on the game's thread each with one ----
 // (a page written and then unmapped before the submit faulted a plain copy: ReadProcessMemory fails on it instead.
@@ -2054,6 +2252,13 @@ uint64_t memory_in_place_part() { return mem_in_place_part.load(); }
 void memory_recording_value(uint64_t value, uint64_t completed) {
     mem_rec_value = value;
     if (completed > mem_completed) mem_completed = completed;
+    std::lock_guard lk(pools_mu);
+    flush_copies_locked(mem_completed);
+}
+void memory_flush_copy_pools(uint64_t completed) {
+    std::lock_guard lk(pools_mu);
+    if (completed > mem_completed) mem_completed = completed;
+    flush_copies_locked(mem_completed);
 }
 /// (longshot, RX_VK_FRAME_TRACE) The time the replay has waited for the GPU in take_capture, for the pages a submission still
 /// on the GPU writes back: part of the trace's memsync_ms, and the part that is a wait. Frames of 36-201 ms of memory sync in a
@@ -2879,6 +3084,7 @@ void bg_drain() {
     for (auto& [lo, p] : ready) {
         auto imp = imported.find(lo);
         if (imp != imported.end() && imp->second.hi >= p.hi) {
+            unmap_copy(p);
             destroy_import_buffer(p.buffer);
             vkFreeMemory(dev.device, p.memory, nullptr);
             for (VkDeviceMemory m : p.pieces) vkFreeMemory(dev.device, m, nullptr);
@@ -2897,6 +3103,7 @@ void bg_drain() {
         }
         if (overlap) {
             st_prefetch_dropped++;
+            unmap_copy(p);
             destroy_import_buffer(p.buffer);
             vkFreeMemory(dev.device, p.memory, nullptr);
             for (VkDeviceMemory m : p.pieces) vkFreeMemory(dev.device, m, nullptr);
@@ -3103,6 +3310,7 @@ Pool* pool_lookup(uint64_t guest, uint64_t size) {
             }
             return nullptr;
         }
+        copy_pool_inherit(p, overlapped);   // (GPU bytes live in the old copy, not in guest memory, until they are flushed)
         for (uint64_t k : overlapped) {   // (the pools it took in)
             auto o = imported.find(k);
             if (o != imported.end())   // (their mirrors' contents come with them; and how often the range was trimmed: mirror_trim.h)
@@ -3852,8 +4060,15 @@ void memory_note_gpu_write(uint64_t gpu, uint64_t size) {
     // (and the pools it reaches keep their mirrors: imports are at most 1 GB, so none further down reaches guest)
     for (auto it = imported.upper_bound(guest + size - 1); it != imported.begin();) {
         --it;
-        if (it->second.hi > guest) it->second.gpu_only = true;
-        else if (it->second.hi + (1ull << 30) < guest) break;
+        if (it->second.hi > guest) {
+            it->second.gpu_only = true;
+            if (it->second.copied) {
+                const uint64_t a = std::max(guest, it->second.lo);
+                const uint64_t b = std::min(guest + size, it->second.hi);
+                if (a < b) note_copy_write(it->second, a - it->second.lo, b - a);
+                if (it->second.last_value < mem_rec_value) it->second.last_value = mem_rec_value;
+            }
+        } else if (it->second.hi + (1ull << 30) < guest) break;
     }
 }
 void memory_rb_recording_begun() {
@@ -3959,16 +4174,16 @@ int memory_guest_imported(uint64_t lo, uint64_t hi) {
     auto it = imported.upper_bound(hi);   // (pools by lo: those starting below hi, the last ones checked first)
     while (it != imported.begin()) {
         --it;
-        if (it->second.hi > lo) return 1;
+        if (it->second.hi > lo) return it->second.copied ? 0 : 1;
         if (it->second.hi + (1ull << 30) < lo) break;   // (imports are at most 1 GB: none further down reaches lo)
     }
     for (const auto& nh : retired_pools)
-        if (nh.mapped().memory && nh.mapped().lo < hi && lo < nh.mapped().hi) return 1;
+        if (nh.mapped().memory && !nh.mapped().copied && nh.mapped().lo < hi && lo < nh.mapped().hi) return 1;
     // (longshot, 11-13) and the idle pools given back (imports_give_back) whose memory is not freed yet: waiting for the GPU, or
     // for their wait on AMD and Intel. Not counted, the game's freed pages under them were decommitted while the driver still
     // had them imported, which faulted the device (hos_mem.c FreeMemoryPages)
     for (const auto& nh : evicted_pools)
-        if (nh.mapped().memory && nh.mapped().lo < hi && lo < nh.mapped().hi) return 1;
+        if (nh.mapped().memory && !nh.mapped().copied && nh.mapped().lo < hi && lo < nh.mapped().hi) return 1;
     return 0;
 }
 
@@ -4100,8 +4315,8 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     // lookup under the lock was ~8% of the replay's time in a race); the rest under it, as below)
     const bool par = par_active.load(std::memory_order_relaxed);
     TlPool& tl = tl_pools[(guest >> 16) & 1023];
-    if (!written && tl.p && tl.gen == pools_gen.load(std::memory_order_relaxed) && guest >= tl.p->lo &&
-        guest <= tl.p->hi && size <= tl.p->hi - guest) {   // (longshot: no wrap-around for a huge size, as pool_of)
+    if (!written && tl.p && !tl.p->copied && tl.gen == pools_gen.load(std::memory_order_relaxed) && guest >= tl.p->lo &&
+        guest <= tl.p->hi && size <= tl.p->hi - guest) {   // (longshot: no wrap-around for a huge size, as pool_of. A copy publishes CPU writes under the lock)
         Pool* p = tl.p;
         const uint64_t off = guest - p->lo;
         if (p->last_value < mem_rec_value) p->last_value = mem_rec_value;
@@ -4133,10 +4348,12 @@ BufferRef gpu_buffer_bind(uint64_t gpu, uint64_t size, bool written) {
     Pool* p = pool_of(guest, size);
     if (!p) return {};
     tl = {p, pools_gen.load(std::memory_order_relaxed)};
+    if (p->copied) publish_copy(*p);
     if (p->last_value < mem_rec_value) p->last_value = mem_rec_value;
     const uint64_t off = guest - p->lo;
     if (!mirror_on() || !mirror_upload || p->mstate == Pool::MIRROR_REFUSED) {
         if (written) note_direct_write(*p, off, size);
+        if (written && p->copied) note_copy_write(*p, off, size);
         if (mirror_on()) { auto& e = direct_by_pool[p->lo]; e.first++, e.second = mirror_upload ? (int)p->mstate : 9; direct_bytes_by_pool[p->lo] += size; }
         // (longshot) written by the GPU in guest memory itself, past the mirror (bound outside a recording's uploads): the
         // write-back diff's shadow no longer knows those pages, and reads them again at its next write-back, after this write
@@ -4277,7 +4494,7 @@ std::deque<DeadMirror> dead_mirrors;
 // Forest ~1.3 GB of imports, 15-45 ms a submission (3-4 fps on an RX 7800 XT with 11 ms of GPU time; issues 312, 413). Its
 // table entries went at its retirement, and its mirror goes before (mstate), so once the GPU is past retired_value nothing
 // reaches it. The node stays (pointers to it are kept elsewhere); only its buffer and memory go. RX_VK_KEEP_RETIRED=1: kept
-struct DeadImport { VkBuffer buffer; VkDeviceMemory memory; uint64_t value; uint64_t bytes; std::vector<VkDeviceMemory> pieces; };
+struct DeadImport { VkBuffer buffer; VkDeviceMemory memory; uint64_t value; uint64_t bytes; std::vector<VkDeviceMemory> pieces; void* map = nullptr; bool copied = false; };
 std::deque<DeadImport> dead_imports;
 uint64_t st_retired_imports_freed = 0, st_retired_import_bytes_freed = 0;
 uint64_t dead_import_bytes = 0;   // (queued in dead_imports: still in the heap's use until the GPU is past them)
@@ -4292,7 +4509,10 @@ void reap_mirrors() {   // (pools_mu held)
         destroy_buffer(dead_mirrors.front().buffer, dead_mirrors.front().alloc);
         dead_mirrors.pop_front();
     }
+    flush_copies_locked(mem_completed);   // (a retired copy's GPU bytes, while its mapping still exists)
     while (!dead_imports.empty() && dead_imports.front().value <= mem_completed) {
+        if (dead_imports.front().copied)
+            copy_bytes -= std::min(copy_bytes, dead_imports.front().bytes);
         destroy_import_buffer(dead_imports.front().buffer);
         vkFreeMemory(dev.device, dead_imports.front().memory, nullptr);
         for (VkDeviceMemory m : dead_imports.front().pieces) vkFreeMemory(dev.device, m, nullptr);
@@ -4361,7 +4581,12 @@ void retired_imports_give_back() {   // (pools_mu held)
         if ((p.mstate == Pool::MIRROR_NONE || p.mstate == Pool::MIRROR_REFUSED) && !p.inherit_pending &&
             p.retired_value <= mem_completed &&
             p.last_value <= mem_completed && retired_give_back::due(mode, idle, idle_ms, floor_ms, want > 0)) {
-            dead_imports.push_back({p.buffer, p.memory, std::max(mem_rec_value, p.last_value), p.hi - p.lo, std::move(p.pieces)});
+            flush_copies_locked(mem_completed);
+            void* map = p.copy_map;
+            const bool copied = p.copied;
+            p.copy_map = nullptr;
+            p.copied = false;
+            dead_imports.push_back({p.buffer, p.memory, std::max(mem_rec_value, p.last_value), p.hi - p.lo, std::move(p.pieces), map, copied});
             dead_import_bytes += p.hi - p.lo;
             p.pieces.clear();
             p.buffer = VK_NULL_HANDLE, p.memory = VK_NULL_HANDLE, p.address = 0;
@@ -4481,6 +4706,8 @@ constexpr uint64_t kImportIdle = 600;
 void imports_give_back() {   // (pools_mu held)
     while (!evicted_pools.empty() && evicted_pools.front().mapped().retired_value <= mem_completed) {
         Pool& p = evicted_pools.front().mapped();
+        flush_copies_locked(mem_completed);
+        unmap_copy(p);
         destroy_import_buffer(p.buffer);
         vkFreeMemory(dev.device, p.memory, nullptr);
         for (VkDeviceMemory m : p.pieces) vkFreeMemory(dev.device, m, nullptr);   // (a pool imported as several dma-bufs)
