@@ -23,6 +23,11 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- The probe tests a CPU-mapped D3D12 write-back buffer using a shader that reads CPU-written values and writes results
+  for the CPU to check after a fence. This experiment has not yet been run on Xbox and is not a guest-memory fallback.
+- The probe and its shader were built locally under a 5 GiB job memory limit and eight-CPU affinity, with a 33.33%
+  host-wide CPU cap. The package's signature, version, contents, and executable were checked locally. These limits
+  do not emulate the Xbox GPU or its UWP memory accounting.
 - The Xbox translator's bounded batches now live in Longshot's wrapper rather than the vendored a64-kit source. The
   packaged native translator is checked with one million synthetic instructions against the desktop path.
 - Invalid compiler memory budgets that overflow during conversion to MB now fall back to the free-memory policy.
@@ -90,11 +95,11 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 This preview does not include the latest upstream changes; their integration has unresolved renderer and builder
 conflicts and has not been validated.
 
-The Series S probe report from package 0.2.9.0 measured shader model 6.4, D3D12 mesh shader tier 0, and successful
+The Series S probe report from package 0.2.22.0 measured shader model 6.4, D3D12 mesh shader tier 0, and successful
 creation of a bounded non-uniform SRV-array pipeline. Both `ID3D12Device3::OpenExistingHeapFromAddress` and
 `ID3D12Device13::OpenExistingHeapFromAddress1` returned `E_INVALIDARG` for the tested ordinary and guest-window
-allocations. The probe's source-voice failure is inconclusive because that version destroys its mastering voice before
-creating the source voice; the corrected probe needs to be run on the console.
+allocations, including `VirtualAllocFromApp` and `VirtualAlloc2FromApp`, despite the existing-heap capability flag.
+The corrected probe also submitted a stereo XAudio source buffer and recorded completion; game audio remains unverified.
 
 When Vulkan buffer device addresses (BDA) are unavailable, the renderer enters a limited bound-buffer compatibility
 mode. A bounded guest-address table is implemented: it searches up to eight imported pools with statically indexed

@@ -789,6 +789,16 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 )HLSL";
 
+const char* kComputeMappedBuffer = R"HLSL(
+RWByteAddressBuffer data : register(u0);
+[RootSignature("UAV(u0)")]
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint value = data.Load(id.x * 4);
+    data.Store(4096 + id.x * 4, value ^ 0xa5a55a5a);
+}
+)HLSL";
+
 // The Series S UWP probe reports shader model 6.4, so Longshot cannot use
 // ResourceDescriptorHeap directly. Check whether a bounded descriptor table
 // with a non-uniform index can still be used for a future address-table path.
@@ -844,12 +854,68 @@ struct Gpu {
         if (FAILED(hr)) return hr;
         ID3D12CommandList* l[] = {list.get()};
         q->ExecuteCommandLists(1, l);
-        q->Signal(fence.get(), ++value);
+        hr = q->Signal(fence.get(), ++value);
+        if (FAILED(hr)) return hr;
         for (int i = 0; i < 5000 && fence->GetCompletedValue() < value; ++i) Sleep(1);
         if (fence->GetCompletedValue() < value) return E_PENDING;
         return dev->GetDeviceRemovedReason();
     }
 };
+
+void mapped_buffer_test(Gpu& g) {
+    const char* label = "CPU-mapped write-back GPU buffer";
+    auto cs = compile(kComputeMappedBuffer, L"main", L"cs_6_4", "mapped-buffer compute cs_6_4");
+    if (!cs) { R.add(label, "shader compilation unavailable or failed"); return; }
+    com_ptr<ID3D12RootSignature> rs;
+    HRESULT hr = g.dev->CreateRootSignature(0, cs->GetBufferPointer(), cs->GetBufferSize(),
+                                            __uuidof(ID3D12RootSignature), rs.put_void());
+    com_ptr<ID3D12PipelineState> pso;
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pd{};
+    pd.pRootSignature = rs.get();
+    pd.CS = {cs->GetBufferPointer(), cs->GetBufferSize()};
+    if (SUCCEEDED(hr)) hr = g.dev->CreateComputePipelineState(&pd, __uuidof(ID3D12PipelineState), pso.put_void());
+    if (FAILED(hr)) { R.add(label, "pipeline " + hr_text(hr)); return; }
+
+    D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_CUSTOM, D3D12_CPU_PAGE_PROPERTY_WRITE_BACK, D3D12_MEMORY_POOL_L0, 1, 1};
+    D3D12_RESOURCE_DESC bd{D3D12_RESOURCE_DIMENSION_BUFFER, 0, 8192, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0},
+                           D3D12_TEXTURE_LAYOUT_ROW_MAJOR, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+    com_ptr<ID3D12Resource> buf;
+    hr = g.dev->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                         __uuidof(ID3D12Resource), buf.put_void());
+    if (FAILED(hr)) { R.add(label, "CreateCommittedResource " + hr_text(hr)); return; }
+    uint32_t* words = nullptr;
+    D3D12_RANGE read_range{0, 8192};
+    hr = buf->Map(0, &read_range, reinterpret_cast<void**>(&words));
+    if (FAILED(hr)) { R.add(label, "Map " + hr_text(hr)); return; }
+    for (uint32_t i = 0; i < 1024; ++i) {
+        words[i] = i * 17 + 3;
+        words[1024 + i] = 0;
+    }
+
+    hr = g.alloc->Reset();
+    if (SUCCEEDED(hr)) hr = g.list->Reset(g.alloc.get(), nullptr);
+    if (FAILED(hr)) {
+        R.add(label, "command reset " + hr_text(hr));
+        buf->Unmap(0, nullptr);
+        return;
+    }
+    g.list->SetComputeRootSignature(rs.get());
+    g.list->SetPipelineState(pso.get());
+    g.list->SetComputeRootUnorderedAccessView(0, buf->GetGPUVirtualAddress());
+    g.list->Dispatch(16, 1, 1);
+    hr = g.run();
+    if (FAILED(hr)) {
+        R.add(label, "GPU work " + hr_text(hr));
+    } else {
+        uint32_t mismatch = 1024;
+        for (uint32_t i = 0; i < 1024; ++i) {
+            if (words[1024 + i] != ((i * 17 + 3) ^ 0xa5a55a5a)) { mismatch = i; break; }
+        }
+        R.add(label, mismatch == 1024 ? "CPU-to-GPU read and GPU-to-CPU write ok after fence" :
+              fmt("WRONG at word %u: got 0x%08x", mismatch, words[1024 + mismatch]));
+    }
+    buf->Unmap(0, nullptr);
+}
 
 // A buffer over memory the CPU allocated (ID3D12Device3::OpenExistingHeapFromAddress): the GPU copies the first MB to
 // the second, and a shader writes the third, on memory that is not copied anywhere, as Longshot's NVN pools need.
@@ -1043,6 +1109,7 @@ void probe_d3d12() {
         R.add("bounded non-uniform SRV array pipeline", hr_text(hr));
     }
     compile(kCompute, L"main", L"cs_6_6", "DXC-only cs_6_6 (bindless ResourceDescriptorHeap; adapter reports max 6.4)");
+    mapped_buffer_test(g);
     R.flush();
 
     uint8_t* plain = static_cast<uint8_t*>(pVirtualAlloc ? pVirtualAlloc(nullptr, 16 * MB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) : nullptr);

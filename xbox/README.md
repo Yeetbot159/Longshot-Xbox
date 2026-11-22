@@ -194,10 +194,11 @@ that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh f
 
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
 probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExistingHeapFromAddress` test returned
-`E_INVALIDARG`. The current probe separately records the one-byte result and still attempts
-`ID3D12Device13::OpenExistingHeapFromAddress1` with the full aligned 16 MB allocation, on ordinary and reserved-window
-memory, before checking GPU reads and writes. A Series S report from probe 0.2.9.0 returned `0x80070057` for both
-sizes and both memory locations; no imported-memory GPU read/write was reached. This leaves the current
+`E_INVALIDARG`. The probe separately records the one-byte result and still attempts
+`ID3D12Device13::OpenExistingHeapFromAddress1` with the full aligned 16 MB allocation before checking GPU reads and writes.
+The Series S 0.2.22.0 report returned `0x80070057` for both sizes and the older API, with `VirtualAlloc`,
+`VirtualAllocFromApp`, `VirtualAlloc2FromApp`, and committed memory in the reserved guest window, despite reporting
+existing heaps as supported. No imported-memory GPU read/write was reached. This leaves the current
 host-import-dependent guest pool and mesh fallbacks unverified, not proof that all possible memory-import techniques fail. The
 renderer logs Vulkan's bounded storage-buffer array features and descriptor limits when BDA is missing. No Series S
 pipeline or frame has been verified.
@@ -206,9 +207,13 @@ For each imported pool, the renderer checks the pointer's Vulkan memory types ag
 selects only host-visible, coherent memory. It reports the failing import step rather than reusing a type chosen for a
 different pointer. This avoids invalid imports but does not replace host import with a copy-backed memory path.
 
-The same probe reports `0x88960001` when creating a stereo source voice, but its test destroyed the mastering voice
-first. The corrected probe keeps the mastering voice alive; this result does not establish that the launcher audio path
-fails or succeeds, and playback needs a new console test.
+The 0.2.22.0 probe kept the mastering voice alive and successfully submitted and completed a stereo source buffer.
+This tests the probe's XAudio path, not game audio playback.
+
+The probe also tests a small CPU-mapped, write-back D3D12 buffer with a compute shader that reads CPU-written
+values and writes results back, checked after a GPU fence. This new experiment has not yet been run on Xbox. Even a
+success would not provide an import of the game's existing guest addresses or establish Vulkan support, pool
+coherence, memory-budget compliance, or gameplay.
 
 How far Dozen is from a UWP app, by its imports (`uwp_gap.py --pe` on mesa-dist-win 26.2.6's `vulkan_dzn.dll`,
 `spirv_to_dxil.dll` and `dxil.dll`): 151 of its 162 Windows functions are in the app container's library. The 11
@@ -288,7 +293,7 @@ the same network.
 | memory | The 512 GB reservation at the fixed address the game's code is built for, commit-on-touch by an exception handler, write traps, write watch, the app's memory limit |
 | code from outside the package | Whether memory can be made executable (`codeGeneration`), 640 MB of it, whether a DLL loads from LocalState, `RtlAddFunctionTable`, file mapping from apps |
 | building on the console | A CPU benchmark set against a PC's (`bench_pc.exe`, built beside the probe), whether the app may start a program, the USB drive's write and read speed |
-| Direct3D 12 | Feature level, shader model, mesh shaders, wave ops, 64-bit atomics, enhanced barriers, bindless; importing CPU memory into the GPU with no copy (`OpenExistingHeapFromAddress`), a compute shader writing it; shaders compiled on the console by the packaged DXC; how much GPU memory can be allocated |
+| Direct3D 12 | Feature level, shader model, mesh shaders, wave ops, 64-bit atomics, enhanced barriers, bindless; importing CPU memory into the GPU with no copy (`OpenExistingHeapFromAddress`); a separate CPU-mapped write-back buffer read and written by a compute shader; shaders compiled on the console by the packaged DXC; how much GPU memory can be allocated |
 | CPU commit limit | How much memory the app can commit and touch before the console refuses |
 
 ## Building (on Windows)
