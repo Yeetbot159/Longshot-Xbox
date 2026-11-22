@@ -57,14 +57,18 @@ assert numpy.__version__
 
     def test_native_helpers_load_without_rebuilding(self):
         script = """
+import os
 import sys
 from unittest import mock
 sys.path.insert(0, sys.argv[1] + r'\\nx2')
 sys.path.insert(0, sys.argv[1] + r'\\third_party\\a64-kit\\lift')
 import a64emit, zbic
 with mock.patch('subprocess.run', side_effect=AssertionError('unexpected helper rebuild')):
-    texts, flags = a64emit.translate([(0, 0xd503201f)])
-    assert len(texts) == len(flags) == 1
+    items = [(i * 4, 0xd503201f) for i in range(9000)]
+    desktop = a64emit.translate(items)
+    os.environ['LONGSHOT_XBOX'] = '1'
+    xbox = a64emit.translate(items)
+    assert xbox == desktop and len(xbox[0]) == len(xbox[1]) == len(items)
     assert zbic.lib().zbic_content_size(b'invalid', 7) == -1
 """
         env = os.environ.copy()
