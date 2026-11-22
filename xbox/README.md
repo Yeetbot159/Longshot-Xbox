@@ -199,6 +199,14 @@ not been validated on Xbox. These experimental paths do not establish complete r
 non-uniform SRV descriptor array, a promising prerequisite for a UWP-safe address-table path. It does not establish
 that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh fallback works.
 
+On the tested PC Dozen 26.2.6 build, creating attachment views for an RGBA swapchain caused later timeline semaphore
+creation to fail; the renderer prefers BGRA on Dozen when the surface offers it. With that workaround a capped PC
+harness reached presentation, but its captured frames were black. This Dozen build advertises neither
+`VK_EXT_extended_dynamic_state` nor `VK_EXT_extended_dynamic_state2`, while the renderer still uses those dynamic
+pipeline states; graphics pipeline creation faulted. A static-state fallback is needed before this path can render
+the game. The run also later hit the job memory limit and exited with a stack overflow. Neither result proves the
+cause of the separate Xbox crash.
+
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
 

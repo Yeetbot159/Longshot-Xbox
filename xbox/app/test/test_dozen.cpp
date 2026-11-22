@@ -200,7 +200,7 @@ done:
 // chain handed over by DComp.DLL (the app's, dcomp_shim.cpp) ----
 
 const HWND kToken = dcomp::kWindowToken;
-constexpr LONG kWidth = 1280, kHeight = 720;
+constexpr LONG kWidth = 1920, kHeight = 1080;
 IUnknown* g_shown;
 int g_shows;
 
@@ -222,6 +222,7 @@ void show(IUnknown* swapchain) {
 static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint32_t family) {
     VKF(vkGetPhysicalDeviceSurfaceSupportKHR);
     VKF(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+    VKF(vkGetPhysicalDeviceFeatures2);
     VKF(vkCreateDevice);
     VKF(vkGetDeviceProcAddr);
     VkSurfaceKHR surface;
@@ -233,17 +234,19 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps) != VK_SUCCESS) return "the surface's capabilities";
     if (caps.currentExtent.width != kWidth || caps.currentExtent.height != kHeight) return "the surface's size is not GetClientRect's";
 
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES};
     VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-    f12.timelineSemaphore = VK_TRUE;
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-    f13.synchronization2 = VK_TRUE;
-    f13.pNext = &f12;
+    features.pNext = &f11, f11.pNext = &f12, f12.pNext = &f13;
+    vkGetPhysicalDeviceFeatures2(phys, &features);
+    features.features.robustBufferAccess = VK_FALSE;
     const float prio = 1.0f;
     VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     q.queueFamilyIndex = family, q.queueCount = 1, q.pQueuePriorities = &prio;
     const char* ext = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    di.pNext = &f13, di.queueCreateInfoCount = 1, di.pQueueCreateInfos = &q, di.enabledExtensionCount = 1, di.ppEnabledExtensionNames = &ext;
+    di.pNext = &features, di.queueCreateInfoCount = 1, di.pQueueCreateInfos = &q, di.enabledExtensionCount = 1, di.ppEnabledExtensionNames = &ext;
     VkDevice dev;
     if (vkCreateDevice(phys, &di, nullptr, &dev) != VK_SUCCESS) return "vkCreateDevice with VK_KHR_swapchain";
 #define VKD(name) auto name = (PFN_##name)vkGetDeviceProcAddr(dev, #name)
@@ -283,7 +286,7 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     ci.surface = surface, ci.minImageCount = caps.minImageCount, ci.imageFormat = VK_FORMAT_B8G8R8A8_UNORM;
     ci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR, ci.imageExtent = caps.currentExtent, ci.imageArrayLayers = 1;
-    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, ci.presentMode = VK_PRESENT_MODE_FIFO_KHR, ci.clipped = VK_TRUE;
     VkSwapchainKHR chain = VK_NULL_HANDLE;
     std::vector<VkImage> images;
@@ -479,7 +482,8 @@ int main(int argc, char** argv) {
                     f2.features.geometryShader, mesh.taskShader, mesh.meshShader);
         for (const char* e : {VK_EXT_MESH_SHADER_EXTENSION_NAME, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME,
                               VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME,
-                              VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
+                              VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
+                              VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME,
                               VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME,
                               VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
                               VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME,
@@ -505,7 +509,8 @@ int main(int argc, char** argv) {
         if (wrong > 0) std::printf("      %d of 4096 values wrong\n", wrong);
         CHECK(wrong == 0, "a compute program (SPIR-V to DXIL), timeline semaphore and submit2, on a new thread");
 
-        const char* failed = present_once(instance, phys, family);
+        const char* failed = nullptr;
+        std::thread([&] { failed = present_once(instance, phys, family); }).join();
         if (failed) std::printf("      failed: %s\n", failed);
         CHECK(!failed, "a swap chain on no window, handed over by DComp.DLL at the window's size, and a present");
     }

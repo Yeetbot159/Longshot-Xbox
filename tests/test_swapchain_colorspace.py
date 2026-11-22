@@ -20,6 +20,9 @@ def main():
         raise SystemExit("the surface format choice ignores the colour space (PASS_THROUGH_EXT on Wayland)")
     if "break;" in loop:
         raise SystemExit("the surface format choice stops at the first match: a driver listing only sRGB changes format")
+    dozen = loop[loop.index("if (dev.driver_id == VK_DRIVER_ID_MESA_DOZEN)"):]
+    if "f.format == VK_FORMAT_B8G8R8A8_UNORM && f.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR" not in dozen:
+        raise SystemExit("Dozen must prefer a BGRA UNORM sRGB surface when available")
     print("PASS: the swapchain takes an sRGB UNORM surface format (the last one, as before)")
 
 
