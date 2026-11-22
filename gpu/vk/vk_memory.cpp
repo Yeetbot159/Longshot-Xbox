@@ -412,6 +412,26 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
         import_remember_failure(lo, hi);
         return false;
     }
+#ifdef _WIN32
+    // Dozen may advertise host imports while excluding HOST_ALLOCATION from the buffer's compatible handle types.
+    // Reject that combination before committing guest pages, but leave the independent Linux dma-buf path alone.
+    if (dev.driver_id == VK_DRIVER_ID_MESA_DOZEN) {
+        const bool host_buffer_supported = [] {
+            if (!vkGetPhysicalDeviceExternalBufferProperties) return false;
+            VkPhysicalDeviceExternalBufferInfo query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
+            query.usage = guest_buffer_usage();
+            query.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+            VkExternalBufferProperties caps{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+            vkGetPhysicalDeviceExternalBufferProperties(dev.physical, &query, &caps);
+            return (caps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT) &&
+                   (caps.externalMemoryProperties.compatibleHandleTypes & VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT);
+        }();
+        if (!host_buffer_supported) {
+            host_import_failed(lo, hi, "Dozen host buffer import is not supported", VK_ERROR_FEATURE_NOT_PRESENT);
+            return false;
+        }
+    }
+#endif
     p.lo = lo;
     p.hi = hi;
     uint8_t* ptr = host->guest_base() + lo;

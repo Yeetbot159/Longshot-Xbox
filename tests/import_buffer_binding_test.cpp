@@ -27,7 +27,7 @@ struct Pool {
     VkBuffer buffer{}; VkDeviceMemory memory{}; VkDeviceAddress address = 0;
     std::vector<VkDeviceMemory> pieces;
 };
-struct { VkDevice device{}; VkPhysicalDeviceMemoryProperties memory{}; bool dma_buf_import = true, sparse_buffers = true;
+struct { VkDevice device{}; VkPhysicalDevice physical{}; VkPhysicalDeviceMemoryProperties memory{}; bool dma_buf_import = true, sparse_buffers = true;
          VkDriverId driver_id{}; struct { bool bufferDeviceAddress = true; } vk12; } dev;
 struct Host { uint8_t* guest_base() { static uint8_t bytes[8192]{}; return bytes; } } host_value;
 Host* host = &host_value;
@@ -42,6 +42,9 @@ unsigned creates = 0, allocations = 0, binds = 0, address_queries = 0, destroyed
 unsigned sparse_calls = 0;
 unsigned owner_releases = 0;
 unsigned property_queries = 0;
+unsigned commit_calls = 0, capability_queries = 0;
+VkExternalMemoryFeatureFlags external_features = VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+VkExternalMemoryHandleTypeFlags compatible_handles = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
 uint32_t host_types = 1, buffer_types = 1, allocated_type = UINT32_MAX;
 VkDeviceSize required_size = 4096;
 uintptr_t next_id = 1;
@@ -59,6 +62,7 @@ using SIZE_T = size_t;
 constexpr int MEM_COMMIT = 1, MEM_RESERVE = 2, PAGE_READWRITE = 4;
 struct MEMORY_BASIC_INFORMATION { uint8_t* BaseAddress; size_t RegionSize; int State; };
 void* VirtualAlloc(void* p, size_t, int, int) {
+    commit_calls++;
     return fault == Fault::Commit || fault == Fault::Query || fault == Fault::FreePages || fault == Fault::BadRegion ? nullptr : p;
 }
 size_t VirtualQuery(void* p, MEMORY_BASIC_INFORMATION* info, size_t n) {
@@ -67,6 +71,15 @@ size_t VirtualQuery(void* p, MEMORY_BASIC_INFORMATION* info, size_t n) {
              fault == Fault::FreePages ? 0 : MEM_RESERVE};
     return n;
 }
+void VKAPI_CALL external_buffer_properties(VkPhysicalDevice, const VkPhysicalDeviceExternalBufferInfo* info,
+                                            VkExternalBufferProperties* caps) {
+    capability_queries++;
+    assert(info->handleType == VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT);
+    assert(info->usage == guest_buffer_usage());
+    caps->externalMemoryProperties.externalMemoryFeatures = external_features;
+    caps->externalMemoryProperties.compatibleHandleTypes = compatible_handles;
+}
+PFN_vkGetPhysicalDeviceExternalBufferProperties vkGetPhysicalDeviceExternalBufferProperties = external_buffer_properties;
 VkResult vkGetMemoryHostPointerPropertiesEXT(VkDevice, VkExternalMemoryHandleTypeFlagBits, const void*, VkMemoryHostPointerPropertiesEXT* hp) {
     property_queries++;
     if (fault == Fault::Properties) return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -166,6 +179,11 @@ void run(const std::string& route, const std::string& test) {
     if (test == "query-error") fault = Fault::Query;
     if (test == "free-pages") fault = Fault::FreePages;
     if (test == "bad-region") fault = Fault::BadRegion;
+    if (test == "dozen-supported" || test == "dozen-no-import" || test == "dozen-incompatible" || test == "dozen-no-query")
+        dev.driver_id = VK_DRIVER_ID_MESA_DOZEN;
+    if (test == "dozen-no-import") external_features = 0;
+    if (test == "dozen-incompatible") compatible_handles = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_WIN32_BIT;
+    if (test == "dozen-no-query") vkGetPhysicalDeviceExternalBufferProperties = nullptr;
     if (test == "buffer-type-mismatch") buffer_types = 2;
     if (test == "host-type-mismatch") host_types = 2;
     if (test == "coherent-mismatch") dev.memory.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
@@ -203,6 +221,18 @@ void run(const std::string& route, const std::string& test) {
         return;
     }
     const bool success = call(route, p);
+    if (test == "dozen-no-import" || test == "dozen-incompatible" || test == "dozen-no-query") {
+        assert(!success && import_result == VK_ERROR_FEATURE_NOT_PRESENT && !commit_calls && !property_queries && !creates);
+        assert(capability_queries == (test == "dozen-no-query" ? 0u : 1u));
+        assert(import_on_hold(0, 4096));
+        empty();
+        return;
+    }
+    if (test == "dozen-supported") {
+        assert(success && capability_queries == 1 && commit_calls == 1 && property_queries == 1);
+        release(p);
+        return;
+    }
     if (test == "commit-error" || test == "query-error" || test == "free-pages" || test == "bad-region") {
         assert(!success && !p.buffer && !p.memory && property_queries == 0 && creates == 0 && allocations == 0);
         assert(import_result == VK_ERROR_UNKNOWN);

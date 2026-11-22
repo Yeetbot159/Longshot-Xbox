@@ -235,7 +235,10 @@ capture-buffer prewarming did not prevent the crash. One debugger run reported 2
 window and 587 MB for the loaded game module near a stack overflow; another located the exception in the renderer's
 stack-probe routine. Memory pressure was observed, but the precise cause of the stack overflow is not established.
 Guest imports now stop and report an error if their page-commit walk fails instead of passing an incompletely committed
-range to Vulkan. That guard does not resolve the memory pressure or the missing import fallback. These are headless PC
+range to Vulkan. On Windows, Dozen imports also check the external-buffer capabilities before committing pages and
+reject a missing import feature or incompatible host-allocation handle. A repeat capped PC run still recorded zero
+draws and exited with a stack overflow at a 5,011 MB peak private allocation; no meaningful memory reduction was
+established. These guards do not resolve the memory pressure or the missing import fallback. These are headless PC
 diagnostics, not a console test.
 
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
