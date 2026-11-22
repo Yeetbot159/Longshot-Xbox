@@ -212,7 +212,8 @@ This removes a zero-limit rejection, but the tested PC Dozen driver still report
 for guest host-pointer imports. In a separate probe of Dozen 26.2.6, the host pointer's type mask was `0x4` and
 the external buffer's mask was `0x9` on one adapter and `0x1` on the other. The driver revision treats buffers with
 external handles as shared and excludes host-visible types from their requirements. Draws requiring those imports
-are skipped; this does not fix the black frames or establish what happens on Xbox.
+are skipped; this does not fix the black frames or establish what happens on Xbox. The driver also reports compatible
+external buffer handles `0x22` for a host-allocation query, which does not include the requested host-allocation bit.
 
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.

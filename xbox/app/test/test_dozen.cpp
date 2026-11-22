@@ -47,6 +47,7 @@ static void report_host_import(VkInstance instance, VkPhysicalDevice phys, uint3
     VKF(vkGetDeviceProcAddr);
     VKF(vkGetPhysicalDeviceProperties2);
     VKF(vkGetPhysicalDeviceMemoryProperties);
+    VKF(vkGetPhysicalDeviceExternalBufferProperties);
     const float priority = 1.0f;
     VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     queue.queueFamilyIndex = family, queue.queueCount = 1, queue.pQueuePriorities = &priority;
@@ -100,6 +101,14 @@ static void report_host_import(VkInstance instance, VkPhysicalDevice phys, uint3
                             VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
                             VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
                             (bda ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0);
+        VkPhysicalDeviceExternalBufferInfo query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
+        query.usage = buffer_info.usage;
+        query.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+        VkExternalBufferProperties capabilities{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+        vkGetPhysicalDeviceExternalBufferProperties(phys, &query, &capabilities);
+        std::printf("      guest host buffer capabilities: features %#x, compatible handles %#x\n",
+                    capabilities.externalMemoryProperties.externalMemoryFeatures,
+                    capabilities.externalMemoryProperties.compatibleHandleTypes);
         VkBuffer buffer = VK_NULL_HANDLE;
         result = vkCreateBuffer(dev, &buffer_info, nullptr, &buffer);
         if (result == VK_SUCCESS) {
