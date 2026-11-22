@@ -192,6 +192,9 @@ not been validated on Xbox. These experimental paths do not establish complete r
 non-uniform SRV descriptor array, a promising prerequisite for a UWP-safe address-table path. It does not establish
 that Dozen's Vulkan storage-buffer array binding, guest-memory import, or mesh fallback works.
 
+The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
+individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
+
 The previous probe's D3D12 compute-pipeline failure requested shader model 6.6 on an adapter limited to 6.4; the
 probe source now uses 6.4 for that check. The earlier `ID3D12Device3::OpenExistingHeapFromAddress` test returned
 `E_INVALIDARG`. The probe separately records the one-byte result and still attempts
