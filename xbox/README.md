@@ -229,6 +229,13 @@ reached the title screen and reported two draws per frame. Those copies do not p
 coherence and were removed after the experiment. This is not a playable or Xbox-validated renderer; a correct
 GPU-coherent memory path and 8-bit index conversion are still needed.
 
+Scripted New Game attempts using those same temporary copies reached the title selection but crashed under the 5 GiB
+job limit before a gameplay frame or game save was verified. Reducing the AV1 decoder to two threads and disabling
+capture-buffer prewarming did not prevent the crash. One debugger run reported 2,574 MB committed in the guest
+window and 587 MB for the loaded game module near a stack overflow; another located the exception in the renderer's
+stack-probe routine. Memory pressure was observed, but the precise cause of the stack overflow is not established.
+These are headless PC diagnostics, not a console test.
+
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
 
