@@ -233,8 +233,11 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(phys, surface, &caps) != VK_SUCCESS) return "the surface's capabilities";
     if (caps.currentExtent.width != kWidth || caps.currentExtent.height != kHeight) return "the surface's size is not GetClientRect's";
 
+    VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    f12.timelineSemaphore = VK_TRUE;
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     f13.synchronization2 = VK_TRUE;
+    f13.pNext = &f12;
     const float prio = 1.0f;
     VkDeviceQueueCreateInfo q{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     q.queueFamilyIndex = family, q.queueCount = 1, q.pQueuePriorities = &prio;
@@ -250,6 +253,9 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     VKD(vkAcquireNextImageKHR);
     VKD(vkQueuePresentKHR);
     VKD(vkCreateSemaphore);
+    VKD(vkDestroySemaphore);
+    VKD(vkCreateImageView);
+    VKD(vkDestroyImageView);
     VKD(vkCreateCommandPool);
     VKD(vkAllocateCommandBuffers);
     VKD(vkBeginCommandBuffer);
@@ -261,6 +267,17 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     VKD(vkDestroyDevice);
 #undef VKD
     const char* failed = nullptr;
+    auto timeline_works = [&]() {
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo info{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        info.pNext = &type;
+        VkSemaphore semaphore = VK_NULL_HANDLE;
+        VkResult result = vkCreateSemaphore(dev, &info, nullptr, &semaphore);
+        if (result == VK_SUCCESS) vkDestroySemaphore(dev, semaphore, nullptr);
+        return result == VK_SUCCESS;
+    };
+    if (!timeline_works()) failed = "timeline semaphore before swapchain";
     VkQueue queue;
     vkGetDeviceQueue(dev, family, 0, &queue);
     VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
@@ -269,12 +286,14 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, ci.presentMode = VK_PRESENT_MODE_FIFO_KHR, ci.clipped = VK_TRUE;
     VkSwapchainKHR chain = VK_NULL_HANDLE;
+    std::vector<VkImage> images;
+    std::vector<VkImageView> views;
     const int shows = g_shows;
-    if (vkCreateSwapchainKHR(dev, &ci, nullptr, &chain) != VK_SUCCESS) {
+    if (!failed && vkCreateSwapchainKHR(dev, &ci, nullptr, &chain) != VK_SUCCESS) {
         failed = "vkCreateSwapchainKHR";
-    } else if (g_shows == shows || !g_shown) {
+    } else if (!failed && (g_shows == shows || !g_shown)) {
         failed = "DComp's Commit did not hand over the swap chain";
-    } else {
+    } else if (!failed) {
         IDXGISwapChain1* dxgi = nullptr;
         DXGI_SWAP_CHAIN_DESC1 d{};
         if (FAILED(g_shown->QueryInterface(__uuidof(IDXGISwapChain1), (void**)&dxgi)) || FAILED(dxgi->GetDesc1(&d)))
@@ -285,9 +304,30 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
     }
     if (!failed) {
         uint32_t n = 0;
-        vkGetSwapchainImagesKHR(dev, chain, &n, nullptr);
-        std::vector<VkImage> images(n);
-        vkGetSwapchainImagesKHR(dev, chain, &n, images.data());
+        if (!timeline_works()) failed = "timeline semaphore after swapchain";
+        else if (vkGetSwapchainImagesKHR(dev, chain, &n, nullptr) != VK_SUCCESS || !n)
+            failed = "swapchain image count";
+        else {
+            images.resize(n);
+            if (vkGetSwapchainImagesKHR(dev, chain, &n, images.data()) != VK_SUCCESS || !n)
+                failed = "swapchain images";
+            else images.resize(n);
+        }
+        for (auto image : images) {
+            if (failed) break;
+            VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            vi.image = image, vi.viewType = VK_IMAGE_VIEW_TYPE_2D, vi.format = ci.imageFormat;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageView view = VK_NULL_HANDLE;
+            if (vkCreateImageView(dev, &vi, nullptr, &view) != VK_SUCCESS) {
+                failed = "swapchain image view";
+                break;
+            }
+            views.push_back(view);
+        }
+        if (!failed && !timeline_works()) failed = "timeline semaphore after swapchain image views";
+    }
+    if (!failed) {
         VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         VkSemaphore acquired, drawn;
         vkCreateSemaphore(dev, &sci, nullptr, &acquired);
@@ -331,6 +371,7 @@ static const char* present_once(VkInstance instance, VkPhysicalDevice phys, uint
         }
     }
     vkDeviceWaitIdle(dev);
+    for (auto view : views) vkDestroyImageView(dev, view, nullptr);
     if (chain) vkDestroySwapchainKHR(dev, chain, nullptr);
     vkDestroyDevice(dev, nullptr);
     VKF(vkDestroySurfaceKHR);

@@ -5945,7 +5945,11 @@ bool replay_start() {
     ti.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
     VkSemaphoreCreateInfo tsi{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
     tsi.pNext = &ti;
-    if (vkCreateSemaphore(dev.device, &tsi, nullptr, &timeline) != VK_SUCCESS) return false;
+    const VkResult timeline_result = vkCreateSemaphore(dev.device, &tsi, nullptr, &timeline);
+    if (timeline_result != VK_SUCCESS) {
+        logf("vk: replay timeline semaphore creation failed (VkResult %d)", (int)timeline_result);
+        return false;
+    }
     if (vkCreateSemaphore(dev.device, &tsi, nullptr, &batch_tl) != VK_SUCCESS) batch_tl = VK_NULL_HANDLE;
     if (vkCreateSemaphore(dev.device, &tsi, nullptr, &rec_timeline) != VK_SUCCESS) rec_timeline = VK_NULL_HANDLE;
     VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};

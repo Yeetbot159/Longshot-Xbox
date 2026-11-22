@@ -59,7 +59,9 @@ bool vma_init(PFN_vkGetInstanceProcAddr gipa) {
         logf("vk: VMA allocation boundary: %llu MB across %u heaps (RX_VK_MEMORY_MB=%d)",
              (unsigned long long)(applied >> 20), dev.memory.memoryHeapCount, cap_mb);
     }
-    return vmaCreateAllocator(&ci, &vma) == VK_SUCCESS;
+    const VkResult result = vmaCreateAllocator(&ci, &vma);
+    if (result != VK_SUCCESS) logf("vk: VMA allocator creation failed (VkResult %d)", (int)result);
+    return result == VK_SUCCESS;
 }
 
 // Images come from a pool of 128 MB blocks: on their own, VMA gave most of them dedicated memory (the driver prefers it
