@@ -526,6 +526,7 @@ bool create_device() {
     antilag_device_features(tail);   // (AMD Anti-Lag 2's, when its extension is there)
     vkGetPhysicalDeviceFeatures2(dev.physical, &f);
     if (module_id && module_idf.shaderModuleIdentifier) module_ids_on();
+    dev.index_uint8 = dev.index_uint8 && u8.indexTypeUint8;
     descriptor_buffer.descriptorBufferCaptureReplay = VK_FALSE;
     dev.view_2d_of_3d = dev.view_2d_of_3d && v2d3d.sampler2DViewOf3D;
     coop.cooperativeMatrixRobustBufferAccess = VK_FALSE;

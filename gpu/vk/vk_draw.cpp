@@ -7931,7 +7931,6 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
     if (g_fine) fine_ns[FT_VERTEX] += prof_now() - fine_vertex_t0;
     if (!vertex_complete) occ.drop(kOccVertexInput);
     const VkIndexType itype = d.itype == 0 ? VK_INDEX_TYPE_UINT8_EXT : d.itype == 1 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
-    if (d.indexed && d.itype == 0 && !dev.index_uint8) SKIP_HERE();
     if (d.prim == NVN_DRAW_PRIMITIVE_QUADS) {   // (quads as two triangles each: indices made in the stream)
         if (d.indirect || d.count < 4) SKIP_HERE();
         if (d.count > (1 << 24)) SKIP_HERE();   // (longshot: 4M quads at most; the game's count sized host vectors of up to 16 GB)
@@ -7962,6 +7961,13 @@ void draw(VkCommandBuffer cmd, NvnState& s, const DrawArgs& d) {
                          (uint32_t)d.base_instance);
         st_draws++, ps.draws++;
         return;
+    }
+    if (d.indexed && d.itype == 0 && !dev.index_uint8) {
+        static std::atomic<int> logged{0};
+        if (logged++ < 8)
+            logf("vk: 8-bit indexed draw skipped: unsupported by device, primitive %d, count %d%s, restart %d",
+                 d.prim, d.count, d.indirect ? " indirect" : "", (int)s.restart);
+        SKIP_HERE();
     }
     if (d.indirect) {
         // (longshot) the records the draw reads, at the stride it reads them with (20 for indexed draws), all bound; a

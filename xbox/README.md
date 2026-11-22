@@ -222,6 +222,8 @@ A temporary read-only CPU-copy experiment on the same capped PC path still captu
 The log showed draws skipped because 8-bit index buffers are unsupported by the device; other dispatches were skipped
 for untranslated upscaling networks. The experiment did not preserve GPU writes or memory coherence and was removed;
 it is not a guest-memory fallback. Correctly handling unsupported index buffers and guest-memory access remains necessary.
+The existing quad-to-triangle conversion can now run even without native 8-bit indices, but a subsequent capped run
+showed that the skipped 8-bit draws were six-index triangles, not quads. It still recorded no draws.
 
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
