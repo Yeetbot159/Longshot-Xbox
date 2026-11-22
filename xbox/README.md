@@ -214,6 +214,9 @@ the external buffer's mask was `0x9` on one adapter and `0x1` on the other. The 
 external handles as shared and excludes host-visible types from their requirements. Draws requiring those imports
 are skipped; this does not fix the black frames or establish what happens on Xbox. The driver also reports compatible
 external buffer handles `0x22` for a host-allocation query, which does not include the requested host-allocation bit.
+In capped PC experiments reporting 4096, 6144, and 8192 MB to the guest instead of the default 9809 MB, startup
+exited with access violations before capturing a frame. A debugger showed guest null-address accesses in the 6144 and
+8192 MB runs; their underlying cause has not been established. These reported guest-memory values are not an Xbox test.
 
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
