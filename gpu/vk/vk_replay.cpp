@@ -5785,7 +5785,10 @@ void present(const nvn_tex* t, const int crop[4]) {
         // for: the main thread makes that signal when it has written the frame's data, and the presenting thread, its poll
         // answered at once, came before it at most presents. The frame is whole at its present, which is where the render
         // thread starts it (gate_ready). At most RX_VK_FRAME_GATE_MS. RX_VK_PRESENT_AFTER_SIGNAL=0 / 1 (a test): off / on whatever the gate
-        static const bool after = getenv("RX_VK_PRESENT_AFTER_SIGNAL") ? env_on("RX_VK_PRESENT_AFTER_SIGNAL") : gate_on();
+        static const bool after = [] {
+            const char* after_signal = getenv("RX_VK_PRESENT_AFTER_SIGNAL");
+            return after_signal ? env_on("RX_VK_PRESENT_AFTER_SIGNAL") : gate_on();
+        }();
         // (as long as the gate gives a job: a frame the game takes longer over is waited for too, not started half written)
         static const auto after_ms = std::max(gate_ms(), std::chrono::milliseconds(hold_ms()));
         if (after) {

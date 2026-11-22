@@ -86,7 +86,10 @@ struct VkBufferDeviceAddressInfo {
     VkBuffer buffer = 0;
 };
 struct VkBufferCopy { uint64_t srcOffset, dstOffset, size; };
-struct Dev { VkDevice device = 7; } dev;
+struct Dev {
+    VkDevice device = 7;
+    struct { bool bufferDeviceAddress = true; } vk12;
+} dev;
 // (buffers: handles from 0x100 up, each one's device address the handle << 32)
 VmaAllocationT one_alloc;
 uint64_t made = 0;
@@ -96,6 +99,13 @@ bool create_device_buffer(uint64_t, VkBufferUsageFlags, VkBuffer& buffer, VmaAll
     return true;
 }
 uint64_t vkGetBufferDeviceAddress(VkDevice, const VkBufferDeviceAddressInfo* info) { return (uint64_t)info->buffer << 32; }
+uint64_t queried_buffer_address(VkBuffer buffer) {
+    if (!dev.vk12.bufferDeviceAddress || !buffer) return 0;
+    VkBufferDeviceAddressInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(dev.device, &info);
+}
 std::vector<std::pair<VkBuffer, VkBufferCopy>> cmd_copies;   // (dst, region)
 void vkCmdCopyBuffer(VkCommandBuffer, VkBuffer, VkBuffer dst, uint32_t n, const VkBufferCopy* r) {
     for (uint32_t i = 0; i < n; i++) cmd_copies.push_back({dst, r[i]});

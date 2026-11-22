@@ -146,6 +146,7 @@ static int mouse_stick(int32_t *x, int32_t *y, int pointing) {
     *x = mouse_right[0], *y = mouse_right[1];
     return 1;
 }
+void hos_oot_autoload_input(void) {}
 """
 
 MAIN = r"""

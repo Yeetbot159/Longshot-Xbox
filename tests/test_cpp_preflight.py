@@ -55,9 +55,15 @@ class CppPreflightTests(unittest.TestCase):
             self.fail("Run this check as a script with --cxx (and, on Windows, a configured developer environment)")
         self.temporary = tempfile.TemporaryDirectory(prefix="longshot-cpp-preflight-")
         self.addCleanup(self.temporary.cleanup)
+        self.addCleanup(self.release_work_lock)
         self.root = Path(self.temporary.name).resolve()
         self.addCleanup(self.assert_owned_fixture)
         self.toolchain = Toolchain(COMPILER, COMPILER_FLAGS)
+
+    def release_work_lock(self):
+        if make_game._WORK_LOCK:
+            make_game._WORK_LOCK[1].close()
+            make_game._WORK_LOCK.clear()
 
     def assert_owned_fixture(self):
         self.assertEqual(self.root.parent, Path(tempfile.gettempdir()).resolve())

@@ -11,6 +11,9 @@ import tempfile
 import unittest
 
 
+RUN_ALL_SKIP = {"windows": "requires a staged Xbox tools directory; run directly",
+                "linux": "requires Windows Xbox tools; run on Windows with a staged package"}
+
 TOOLS = Path(sys.argv.pop(1)).resolve()
 PYTHON = TOOLS / "python" / "python.exe"
 
@@ -62,9 +65,12 @@ import sys
 from unittest import mock
 sys.path.insert(0, sys.argv[1] + r'\\nx2')
 sys.path.insert(0, sys.argv[1] + r'\\third_party\\a64-kit\\lift')
+import kit
+import insn
+insn.install()
 import a64emit, zbic
 with mock.patch('subprocess.run', side_effect=AssertionError('unexpected helper rebuild')):
-    items = [(i * 4, 0xd503201f) for i in range(250000)]
+    items = [(i * 4, 0xd503201f) for i in range(1000000)]
     desktop = a64emit.translate(items)
     os.environ['LONGSHOT_XBOX'] = '1'
     xbox = a64emit.translate(items)
@@ -88,6 +94,25 @@ with mock.patch('subprocess.run', side_effect=AssertionError('unexpected helper 
             output = result.stdout + result.stderr
             self.assertEqual(result.returncode, 0, output)
             self.assertIn("0 missing", output)
+
+    def test_staged_builder_uses_the_console_compiler_budget(self):
+        script = """
+import os
+import sys
+sys.path.insert(0, sys.argv[1] + r'\\nx2')
+import build
+assert build.mem_limit_mb() is None
+os.environ['LONGSHOT_MEM_LIMIT_GB'] = '3.0'
+assert build.mem_limit_mb() == 3072
+"""
+        env = os.environ.copy()
+        env["PATH"] = str(Path(env["SYSTEMROOT"]) / "System32")
+        env["LONGSHOT_MEM_LIMIT_GB"] = "1e308"
+        result = subprocess.run([str(PYTHON), "-I", "-B", "-c", script, str(TOOLS)],
+                                cwd=TOOLS, env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("memory free decides", result.stdout)
+        self.assertIn("compilers may take 3 GB together", result.stdout)
 
 
 if __name__ == "__main__":

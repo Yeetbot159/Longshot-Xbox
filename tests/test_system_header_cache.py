@@ -114,7 +114,8 @@ class HeaderCacheTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(make_game, 'LINUX', False))
             stack.enter_context(mock.patch.dict(sys.modules, {'toolchain': Toolchain}))
             stack.enter_context(mock.patch.object(make_game.tempfile, 'TemporaryDirectory',
-                                                 side_effect=lambda: REAL_TEMPORARY(dir=self.root)))
+                                                 side_effect=lambda *args, **kwargs:
+                                                 REAL_TEMPORARY(*args, **dict(kwargs, dir=self.root))))
             stack.enter_context(mock.patch.object(make_game.subprocess, 'run', side_effect=run))
             stack.enter_context(mock.patch.object(make_game.shutil, 'rmtree', side_effect=rmtree))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))

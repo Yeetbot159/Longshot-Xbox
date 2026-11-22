@@ -99,6 +99,11 @@ This upstream Longshot menu reference supplies the choices and defaults shown in
 | | Controls | Opens the Controls page | |
 | | Menu shortcut | Insert or F1; F1 only; Insert, F1 or Esc | Insert, F1 or Esc |
 | | Compact menu key | Right Shift, Right Ctrl | Right Shift |
+| Debug | Player: Damage taken | Half, Normal, Double, Quadruple | Normal |
+
+- **Threaded rendering:** Auto enables the render and recorder threads only when the game process can use at least 12 logical processors and the selected mode is safe. On enables them; Off disables them. The setting takes effect after a restart.
+
+The Controls page binds the `walk` control (Caps Lock by default). Hold it to walk, or choose Toggle in Walk mode.
 
 ## Releases
 

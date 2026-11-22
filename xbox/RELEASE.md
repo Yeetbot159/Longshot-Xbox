@@ -23,6 +23,13 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- The Xbox translator's bounded batches now live in Longshot's wrapper rather than the vendored a64-kit source. The
+  packaged native translator is checked with one million synthetic instructions against the desktop path.
+- Invalid compiler memory budgets that overflow during conversion to MB now fall back to the free-memory policy.
+- Windows control-bridge connections use the Windows named-pipe APIs, and stale Windows test fixtures were updated.
+- The renderer and launcher were built locally with a 5 GiB job memory limit, affinity to eight logical CPUs and a
+  33.33% host-wide CPU cap. The Windows game-free suite passed 561 checks with 38 skips; the unpacked local MSIX passed
+  five bundled-builder tests. These PC limits do not emulate Xbox GPU power, clocks or UWP memory accounting.
 - Packaged NumPy DLLs beside their extension modules; the console builder's `numpy` import no longer calls the
   unsupported `os.add_dll_directory` on the read-only app package.
 - Skipped the unavailable PowerShell process query on Xbox and now report the limitation directly; interrupted compiler

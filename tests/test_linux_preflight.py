@@ -40,6 +40,7 @@ class LinuxPreflightTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="longshot-linux-preflight-")
         self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.release_work_lock)
         self.root = Path(self.temp.name).resolve()
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
@@ -103,6 +104,11 @@ class LinuxPreflightTests(unittest.TestCase):
         self.nup = self.root / "authored.nup"
         self.nup.write_bytes(b"authored package, never passed to a real extractor")
         self.output = io.StringIO()
+
+    def release_work_lock(self):
+        if hasattr(self, "make") and self.make._WORK_LOCK:
+            self.make._WORK_LOCK[1].close()
+            self.make._WORK_LOCK.clear()
 
     def find_module(self, name):
         self.module_queries.append(name)
@@ -194,7 +200,9 @@ class LinuxPreflightTests(unittest.TestCase):
         preflight.assert_called_once_with(str(self.root / "work"))
         self.assertEqual(self.events, ["read", "lift"])
         self.assertEqual(self.module_queries, [])
-        self.assertEqual(self.processes, [])
+        self.assertEqual(len(self.processes), 1)
+        self.assertEqual(self.processes[0][0], str(self.cc))
+        self.assertIn("-c", self.processes[0])
 
     def test_valid_cpm_reaches_read_then_lift(self):
         expected = self.headers()

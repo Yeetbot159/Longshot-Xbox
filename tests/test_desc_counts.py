@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-RUN_ALL_ARGS = ["--cxx", "g++"]
+RUN_ALL_ARGS = ["--cxx", "{cxx}"]
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -62,7 +62,7 @@ def main():
     p.add_argument("--cxx", default="g++")
     a = p.parse_args()
     src = (ROOT / "gpu" / "vk" / "vk_draw.cpp").read_text(encoding="utf-8")
-    build = block(src, "void build_descriptors(const NvnState& s, const Program& p) {")
+    build = block(src, "void build_descriptors(const NvnState& s, const Program& p, const DrawArgs* draw = nullptr) {")
     for needle, why in (
         ("if (kept != ~0ull) {", "the kept word is used only when the program has one"),
         ("p.ready.load(std::memory_order_acquire)", "the counts are kept only for a program that is ready"),

@@ -51,6 +51,7 @@ class LiftCleanupErrorTests(unittest.TestCase):
         self.namespace.update(work=str(self.work), exefs=str(self.root / "exefs"), env={}, key="b" * 40, PY=["authored-python"],
                               gen_dir=str(self.gen), KEPT_LIST="lifted_objects.txt", KEPT_SCHEME=1,
                               kept_lift=[], contextlib=contextlib)
+        self.namespace["_lift_store"] = mock.Mock(root=mock.Mock(return_value=None))
         self.actual_write = self.namespace["write_lift_key"]
 
         def write_key(work, key):

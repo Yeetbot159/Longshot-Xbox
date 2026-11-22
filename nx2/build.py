@@ -170,7 +170,8 @@ HOST_LIBS = ["-lpthread", "-ldl", "-lm"] if LINUX else \
 # (xbox) the app container's import library alone, so the link fails on a desktop function host/uwp does not stand in for
 # (/ignore:4217: host/uwp's own definitions of functions the headers declare imported, which is the point). Not -static:
 # the C++ runtime's DLLs are the app package's, as libc++abi keeps native thread-locals
-UWP_LINK = ["-fuse-ld=lld"] + ["-Wl,-Xlink=/nodefaultlib:" + l for l in ("libcmt", "oldnames", "libvcruntime", "msvcrt")]
+UWP_LINK = ["-fuse-ld=lld", "-Wl,-Xlink=/nodefaultlib:libcmt", "-Wl,-Xlink=/nodefaultlib:oldnames",
+            "-Wl,-Xlink=/nodefaultlib:libvcruntime", "-Wl,-Xlink=/nodefaultlib:msvcrt"]
 UWP_LIBS = ["-nodefaultlibs", "-lc++", "-lunwind", "-lmingw32", "-lmingwex", "-lucrt", "-l:libwinpthread.a", "-lwindowsapp",
             "-lclang_rt.builtins-x86_64", "-Wl,-Xlink=/ignore:4217"]
 GPU = os.path.join(kit.HERE, "..", "gpu")
@@ -504,11 +505,13 @@ def mem_limit_mb():
         gb = float(raw)
     except ValueError:
         gb = 0.0
-    if not (gb > 0 and math.isfinite(gb)):
-        print("LONGSHOT_MEM_LIMIT_GB=%s is not a finite number above 0: the memory free decides" % raw, flush=True)
+    limit = gb * 1024
+    if not (gb > 0 and math.isfinite(gb) and math.isfinite(limit) and limit > 0):
+        print("LONGSHOT_MEM_LIMIT_GB=%s is not a usable finite memory budget above 0: the memory free decides" % raw,
+              flush=True)
         return None
     print("build: the compilers may take %g GB together, whatever is free (LONGSHOT_MEM_LIMIT_GB)" % gb, flush=True)
-    return gb * 1024
+    return limit
 
 
 class MemoryGate:

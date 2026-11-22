@@ -30,7 +30,7 @@ constexpr int VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = 1;
 constexpr int VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 2;
 constexpr int VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO = 0;
 struct VkBufferDeviceAddressInfo { int type; void* next = nullptr; VkBuffer buffer = 0; };
-struct { int device = 0; } dev;
+struct { int device = 0; struct { bool bufferDeviceAddress = true; } vk12; } dev;
 uint64_t mem_completed = 0, mem_rec_value = 1;
 bool flush_ok = true, invalidate_ok = true, allocate_ok = true;
 bool mapping_ok = true, address_ok = true;
@@ -47,6 +47,12 @@ bool create_buffer(uint64_t n, int, bool, VkBuffer& b, VmaAllocation& a, void** 
 }
 void destroy_buffer(VkBuffer, VmaAllocation a) { std::free(a); --live; }
 uint64_t vkGetBufferDeviceAddress(int, const VkBufferDeviceAddressInfo* p) { return address_ok ? p->buffer : 0; }
+uint64_t queried_buffer_address(VkBuffer buffer) {
+    if (!dev.vk12.bufferDeviceAddress) return 0;
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(dev.device, &info);
+}
 '''
 
 CASES = r'''

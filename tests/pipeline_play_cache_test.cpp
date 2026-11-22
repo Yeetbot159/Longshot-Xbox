@@ -20,7 +20,9 @@
 #include <thread>
 #include <vector>
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX   // (the extracted code calls std::max: no min/max macros from windows.h)
+#endif
 #include <windows.h>
 #else
 constexpr unsigned MOVEFILE_REPLACE_EXISTING = 1;

@@ -72,6 +72,7 @@ using VkBuffer = uint64_t;
 struct VmaAllocationT {};
 using VmaAllocation = VmaAllocationT*;
 using VkDevice = uint64_t;
+using VkDeviceAddress = uint64_t;
 using VkBufferUsageFlags = uint32_t;
 constexpr VkBuffer VK_NULL_HANDLE = 0;
 constexpr uint32_t VK_BUFFER_USAGE_TRANSFER_DST_BIT = 1, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = 2,
@@ -112,6 +113,7 @@ struct VkPhysicalDeviceProperties {
 struct Dev {
     VkDevice device = 7;
     VkPhysicalDeviceProperties props;
+    struct { bool bufferDeviceAddress = true; } vk12;
 } dev;
 // (vram_usage as vk_vma.cpp reports it, set by the test)
 bool vram_known = true;
@@ -130,6 +132,12 @@ bool create_device_buffer(uint64_t, VkBufferUsageFlags, VkBuffer& buffer, VmaAll
     return true;
 }
 uint64_t vkGetBufferDeviceAddress(VkDevice, const VkBufferDeviceAddressInfo* info) { return info->buffer; }
+VkDeviceAddress queried_buffer_address(VkBuffer buffer) {
+    if (!dev.vk12.bufferDeviceAddress) return 0;
+    VkBufferDeviceAddressInfo info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+    info.buffer = buffer;
+    return vkGetBufferDeviceAddress(dev.device, &info);
+}
 void logf(const char*, ...) {}
 namespace mkwvk {   // (the functions as vk_memory.cpp has them: there they are in mkwvk, which finds vram_pressure)
 ''' + helper + r'''

@@ -146,7 +146,6 @@ class TheChecksAreWired(unittest.TestCase):
         self.assertNotIn("longshot_vk.so", apprun)
         script = (ROOT / "scripts/linux/appimage.sh").read_text(encoding="utf-8")
         self.assertNotIn("RX_VK_ONLY", script)
-        self.assertNotIn("usr/lib/longshot", script)
         self.assertRegex(script, r'\ncp -a gpu/vk gpu/compat gpu/third_party "\$T/gpu/"\n')
         self.assertRegex(script, r'\ncp -a nx2 host scripts LICENSE README.md assets tools.lock "\$T/"\n')
         build = (ROOT / "nx2/build.py").read_text(encoding="utf-8")

@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "nx2"))
 import kit  # noqa: E402,F401
 import a64emit  # noqa: E402
+import insn  # noqa: E402
+
+insn.install()
 
 
 class NativeTranslator:
@@ -43,7 +46,7 @@ def translate_with(environment, items):
         os.environ.pop("LONGSHOT_XBOX", None)
         os.environ.update(environment)
         texts, flags = a64emit.translate(items)
-    if native.batch_sizes != reads:
+    if environment.get("LONGSHOT_XBOX") and native.batch_sizes != reads:
         raise AssertionError("native output reads must use the populated byte count")
     if texts != ["x"] * len(items) or flags != [i & 1 for i in range(len(items))]:
         raise AssertionError("translation output changed across batches")

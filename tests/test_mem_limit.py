@@ -38,7 +38,7 @@ def main():
         check("automatic keeps the free-memory policy", automatic.limit is None)
         floor = max(1, min(4, (os.cpu_count() or 2) // 2)) if os.name == "nt" else 1
         check("automatic keeps its floor", automatic.floor == floor)
-        for raw in ("", "many", "0", "-4", "nan", "inf", "-inf", "1e309"):
+        for raw in ("", "many", "0", "-4", "nan", "inf", "-inf", "1e309", "1e308"):
             check("%r is not a limit" % raw, gate_with(raw).limit is None)
 
         def no_free_reading():

@@ -4,11 +4,14 @@ build that ended (or was killed) keeps no one out; and main takes it before it r
 
     python -I -B tests/test_work_lock.py
 """
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "nx2"))
@@ -37,7 +40,17 @@ with tempfile.TemporaryDirectory() as top:
     assert killed.stdout.readline().strip() == "held"
     killed.kill()
     killed.wait(timeout=30)
-    make_game.lock_work(work)   # (the build before ended, or was killed: its lock went with it)
+    for _ in range(50):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                make_game.lock_work(work)
+            break
+        except SystemExit as error:
+            if error.code != 1:
+                raise
+            time.sleep(0.02)
+    else:
+        raise AssertionError("a killed build kept the work-folder lock")
     held = make_game._WORK_LOCK[1]
     make_game.lock_work(work)   # (a second main() in the same process: the lock it holds, kept)
     assert make_game._WORK_LOCK[1] is held and not held.closed
@@ -52,6 +65,10 @@ with tempfile.TemporaryDirectory() as top:
     finally:
         holder.stdin.close()
         holder.wait(timeout=30)
+
+if make_game._WORK_LOCK:
+    make_game._WORK_LOCK[1].close()
+    make_game._WORK_LOCK.clear()
 
 src = (ROOT / "nx2" / "make_game.py").read_text(encoding="utf-8")
 body = src[src.index("\ndef main(a=None):"):]

@@ -83,16 +83,44 @@ class Bridge:
             if WINDOWS:
                 name = path if path.startswith("\\\\.\\pipe\\") else "\\\\.\\pipe\\" + path
                 self.sock = None
+                import ctypes
+                import msvcrt
+                from ctypes import wintypes
+                kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                create_file = kernel32.CreateFileW
+                create_file.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+                create_file.restype = wintypes.HANDLE
+                wait_pipe = kernel32.WaitNamedPipeW
+                wait_pipe.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
+                wait_pipe.restype = wintypes.BOOL
+                close_handle = kernel32.CloseHandle
+                close_handle.argtypes = (wintypes.HANDLE,)
+                close_handle.restype = wintypes.BOOL
+                invalid_handle = wintypes.HANDLE(-1).value
                 deadline = time.monotonic() + timeout
                 while True:   # (the bridge keeps one instance waiting: a busy pipe is waited for)
-                    try:
-                        self.pipe = open(name, "r+b", buffering=0)
-                        break
-                    except OSError as e:
-                        # (busy: winerror 231, ERROR_PIPE_BUSY; missing pipes are not waited for)
-                        if getattr(e, "winerror", 0) != 231 or time.monotonic() > deadline:
+                    handle = create_file(name, 0xC0000000, 0, None, 3, 0x80, None)  # (read/write, OPEN_EXISTING)
+                    if handle != invalid_handle:
+                        try:
+                            fd = msvcrt.open_osfhandle(int(handle), os.O_BINARY | os.O_RDWR)
+                        except BaseException:
+                            close_handle(handle)
                             raise
-                        time.sleep(0.02)
+                        try:
+                            self.pipe = os.fdopen(fd, "r+b", buffering=0)
+                        except BaseException:
+                            os.close(fd)
+                            raise
+                        break
+                    error = ctypes.get_last_error()
+                    if error != 231 or time.monotonic() >= deadline:   # (ERROR_PIPE_BUSY)
+                        raise ctypes.WinError(error)
+                    remaining = max(1, min(250, int((deadline - time.monotonic()) * 1000)))
+                    if not wait_pipe(name, remaining):
+                        wait_error = ctypes.get_last_error()
+                        if wait_error not in (121, 231):   # (ERROR_SEM_TIMEOUT, ERROR_PIPE_BUSY)
+                            raise ctypes.WinError(wait_error)
             else:
                 self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 self.sock.settimeout(timeout)

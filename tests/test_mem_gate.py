@@ -55,6 +55,12 @@ def main():
                 worker.join(5)
             check("the waiting compiler starts after release", started.is_set())
             gate.leave(second[0])
+        with mock.patch.object(build, "mem_need", return_value=1500):
+            first = gate.enter("series-x-first")
+            second = gate.enter("series-x-second")
+            check("two 1.5 GB compiler estimates fit the 3 GB console budget", len(gate.running) == 2)
+            gate.leave(second)
+            gate.leave(first)
         with mock.patch.object(build, "mem_need", return_value=4000):
             oversized = gate.enter("oversized")
             check("one oversized compile can still start", oversized in gate.running)

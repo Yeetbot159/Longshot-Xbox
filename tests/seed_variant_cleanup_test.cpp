@@ -30,6 +30,7 @@ namespace Shader { struct Info {}; }
 
 struct {
     uintptr_t device = 123;
+    struct { bool bufferDeviceAddress = true; } vk12;
     bool mesh_shader = true, mesh_fallback = false;
     bool uses_mesh_fallback(bool) const { return false; }
 } dev;

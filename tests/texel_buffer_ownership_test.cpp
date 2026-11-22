@@ -89,6 +89,7 @@ void logf(const char*, ...) {}
 const char* getenv(const char*) { return nullptr; }   // (unrelated diagnostic toggle in reap_mirrors)
 bool env_on(const char* name) { const char* v = getenv(name); return v && !env_value_off(v); }   // (the switches through the stand-in)
 VkDeviceAddress vkGetBufferDeviceAddress(VkDevice, const VkBufferDeviceAddressInfo*) { return 0; }
+VkDeviceAddress queried_buffer_address(VkBuffer) { return 0; }
 void destroy_buffer(VkBuffer, VmaAllocation) {}
 void vkDestroyBuffer(VkDevice, VkBuffer buffer, const VkAllocationCallbacks*) {
     std::lock_guard lk(driver_mu);

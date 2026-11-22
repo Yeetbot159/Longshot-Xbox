@@ -69,16 +69,22 @@ static void facts_of(const char *path, HosCrashLog *f) {
     }
     free(text);
 }
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
 int main(int argc, char **argv) {
     const char *cmd = argv[1];
     if (!strcmp(cmd, "args")) {
         HosCrashArgs a;
-        const int m = hos_crash_args(argc - 1, argv + 1, &a);
+        const int m = hos_crash_args(argc - 2, argv + 2, &a);
         printf("%d|%llu|%s|%s|%s|%s\n", m, (unsigned long long)a.pid, a.run_id, a.record ? a.record : "", a.dir ? a.dir : "",
                a.log ? a.log : "NULL");
     } else if (!strcmp(cmd, "options")) {   /* (the helper's command line: the run's settings file after the log) */
         HosCrashArgs a;
-        const int m = hos_crash_args(argc - 1, argv + 1, &a);
+        const int m = hos_crash_args(argc - 2, argv + 2, &a);
         printf("%d|%s\n", m, a.options ? a.options : "NULL");
     } else if (!strcmp(cmd, "wanted")) {   /* headless off pgo gamescope run [args...] */
         const char *run = strcmp(argv[6], "none") ? argv[6] : NULL;
@@ -99,6 +105,18 @@ int main(int argc, char **argv) {
     } else if (!strcmp(cmd, "quote")) {
         char out[512];
         const size_t n = hos_crash_quote_arg(out, (size_t)atoi(argv[2]), argv[3]);
+        printf("%s\n", n ? out : "<none>");
+    } else if (!strcmp(cmd, "quote-utf8")) {
+        char arg[256], out[512];
+        const size_t hex_size = strlen(argv[3]);
+        if (hex_size % 2 || hex_size / 2 >= sizeof arg) return 2;
+        for (size_t i = 0; i < hex_size; i += 2) {
+            const int hi = hex_digit(argv[3][i]), lo = hex_digit(argv[3][i + 1]);
+            if (hi < 0 || lo < 0) return 2;
+            arg[i / 2] = (char)((hi << 4) | lo);
+        }
+        arg[hex_size / 2] = 0;
+        const size_t n = hos_crash_quote_arg(out, (size_t)atoi(argv[2]), arg);
         printf("%s\n", n ? out : "<none>");
     } else if (!strcmp(cmd, "log")) {
         HosCrashLog f;
@@ -466,7 +484,10 @@ def logic_checks(exe, menu, tmp, form):
     print("PASS: the clipboard tools in turn; the box after Report never says copied when nothing took it")
     # Windows' quoting, read back by CommandLineToArgvW's rules
     for arg in ("C:\\Games\\Longshot", "C:\\Games\\Long shot\\", 'a"b', "x\\\\", "x\\\"y", "", "ゲーム Zélda 🎮", "--crash-watch"):
-        quoted = run(exe, "quote", 500, arg)[:-1]
+        if os.name == "nt" and not arg.isascii():
+            quoted = run(exe, "quote-utf8", 500, arg.encode("utf-8").hex())[:-1]
+        else:
+            quoted = run(exe, "quote", 500, arg)[:-1]
         assert argv_of("prog " + quoted)[1:] == [arg], (arg, quoted)
     assert run(exe, "quote", 4, "long").strip() == "<none>", "a quoted argument that does not fit is refused, not cut"
     print("PASS: a quoted argument comes back whole through CommandLineToArgvW's rules")
@@ -543,7 +564,7 @@ def logic_checks(exe, menu, tmp, form):
         lines = ["Longshot %s record 1" % kind, "version: v3.1.0", "run_id: " + RUN, "when: 20261114T101112Z"]
         lines += ["%s: %s" % kv for kv in values.items()] + ["record_complete: yes"]
         path = tmp / ("record-%d.txt" % len(list(tmp.glob("record-*.txt"))))
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
         return path
 
     def log(*lines):
@@ -790,7 +811,7 @@ def main():
         (tmp / "fixture.c").write_text(FIXTURE, encoding="utf-8")
         (tmp / "menu.cpp").write_text(MENU_REDACT, encoding="utf-8")
         subprocess.run([args.cxx, "-x", "c", "-std=c11", "-D_CRT_SECURE_NO_WARNINGS", "-Wall", "-Wextra", "-Werror", "-I",
-                        str(ROOT / "host"), str(tmp / "fixture.c"), "-x", "none", "-o", str(exe)], check=True, timeout=120)
+                        str(ROOT / "host"), str(tmp / "fixture.c"), "-o", str(exe)], check=True, timeout=120)
         subprocess.run([args.cxx, "-std=c++20", "-O1", *([] if os.name == "nt" else ["-pthread"]), "-I", str(ROOT / "gpu/vk"),
                         str(tmp / "menu.cpp"), str(ROOT / "gpu/vk/vk_bug_report.cpp"), "-o", str(menu)], check=True, timeout=180)
         logic_checks(exe, menu, tmp, form)

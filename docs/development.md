@@ -560,7 +560,8 @@ The Longshot Launcher's build settings set two of these for its build. **Build w
 `LONGSHOT_JOBS` (or the free-memory policy without it); a number overrides it for that build. More workers need more
 memory and are not always faster. **Build memory**: Automatic keeps the free-memory policy; a number of GB sets
 `LONGSHOT_MEM_LIMIT_GB`, so the compilers may reserve that much together whatever is free now (the ones that always run,
-up to 4 on Windows, still run under a smaller number). The builders' `--cli` passes both on as it finds them.
+up to 4 on Windows, still run under a smaller number). Values that are non-positive, non-finite, or overflow when
+converted to MB are rejected and use the free-memory policy. The builders' `--cli` passes both on as it finds them.
 
 Builds keep the button prompts when their source, fonts, game assets, button tables, image overrides,
 Python, package/library versions and generation options still match, and every generated file still has its recorded

@@ -32,8 +32,6 @@ def translate(items, batch=65536):
     """items: list of (pc, word). Returns (list of C texts, list of flag ints), in order."""
     L = lib()
     texts, flags = [], []
-    if os.environ.get("LONGSHOT_XBOX", "").strip().lower() not in ("", "0", "false", "off", "no"):
-        batch = min(batch, 4096)
     cap = 1 << 24
     buf = ctypes.create_string_buffer(cap)
     for start in range(0, len(items), batch):
@@ -48,7 +46,7 @@ def translate(items, batch=65536):
             cap = int(need * 1.25)
             buf = ctypes.create_string_buffer(cap)
             need = L.a64_translate_batch(insns, pcs, n, buf, cap, offs, fl)
-        raw = ctypes.string_at(buf, need).decode("latin-1")
+        raw = buf.raw[:need].decode("latin-1")
         texts += [raw[offs[k]:offs[k + 1]] for k in range(n)]
         flags += list(fl)
     return texts, flags
