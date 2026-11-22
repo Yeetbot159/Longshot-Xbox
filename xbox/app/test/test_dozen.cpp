@@ -42,6 +42,86 @@ static bool has(const std::vector<VkExtensionProperties>& all, const char* name)
     return false;
 }
 
+static void report_host_import(VkInstance instance, VkPhysicalDevice phys, uint32_t family, bool bda) {
+    VKF(vkCreateDevice);
+    VKF(vkGetDeviceProcAddr);
+    VKF(vkGetPhysicalDeviceProperties2);
+    VKF(vkGetPhysicalDeviceMemoryProperties);
+    const float priority = 1.0f;
+    VkDeviceQueueCreateInfo queue{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+    queue.queueFamilyIndex = family, queue.queueCount = 1, queue.pQueuePriorities = &priority;
+    VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    f12.bufferDeviceAddress = bda;
+    const char* ext = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+    VkDeviceCreateInfo info{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
+    info.pNext = &f12, info.queueCreateInfoCount = 1, info.pQueueCreateInfos = &queue;
+    info.enabledExtensionCount = 1, info.ppEnabledExtensionNames = &ext;
+    VkDevice dev = VK_NULL_HANDLE;
+    VkResult result = vkCreateDevice(phys, &info, nullptr, &dev);
+    if (result != VK_SUCCESS) {
+        std::printf("      guest host import probe: device creation failed (%d)\n", int(result));
+        return;
+    }
+#define VKD(name) auto name = (PFN_##name)vkGetDeviceProcAddr(dev, #name)
+    VKD(vkGetMemoryHostPointerPropertiesEXT);
+    VKD(vkCreateBuffer);
+    VKD(vkGetBufferMemoryRequirements);
+    VKD(vkDestroyBuffer);
+    VKD(vkDestroyDevice);
+#undef VKD
+    VkPhysicalDeviceExternalMemoryHostPropertiesEXT host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+    VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+    props.pNext = &host;
+    vkGetPhysicalDeviceProperties2(phys, &props);
+    const uint64_t align = host.minImportedHostPointerAlignment;
+    if (!align || (align & (align - 1)) || align > SIZE_MAX / 2) {
+        std::printf("      guest host import probe: invalid alignment %llu\n", (unsigned long long)align);
+        vkDestroyDevice(dev, nullptr);
+        return;
+    }
+    void* allocation = VirtualAlloc(nullptr, size_t(align * 2), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (!allocation) {
+        std::printf("      guest host import probe: VirtualAlloc failed (%lu)\n", GetLastError());
+        vkDestroyDevice(dev, nullptr);
+        return;
+    }
+    uintptr_t address = (reinterpret_cast<uintptr_t>(allocation) + align - 1) & ~(uintptr_t(align) - 1);
+    VkMemoryHostPointerPropertiesEXT pointer{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    result = vkGetMemoryHostPointerPropertiesEXT(dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                                reinterpret_cast<void*>(address), &pointer);
+    if (result == VK_SUCCESS) {
+        VkExternalMemoryBufferCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+        external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+        VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        buffer_info.pNext = &external, buffer_info.size = align;
+        buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT |
+                            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
+                            VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
+                            (bda ? VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT : 0);
+        VkBuffer buffer = VK_NULL_HANDLE;
+        result = vkCreateBuffer(dev, &buffer_info, nullptr, &buffer);
+        if (result == VK_SUCCESS) {
+            VkMemoryRequirements req{};
+            vkGetBufferMemoryRequirements(dev, buffer, &req);
+            VkPhysicalDeviceMemoryProperties memory{};
+            vkGetPhysicalDeviceMemoryProperties(phys, &memory);
+            const uint32_t type = mkwvk::host_import::coherent_type(pointer.memoryTypeBits, req.memoryTypeBits, memory,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            std::printf("      guest host import probe: pointer %#x, buffer %#x, coherent type %s\n",
+                        pointer.memoryTypeBits, req.memoryTypeBits, type == UINT32_MAX ? "unavailable" : "available");
+            vkDestroyBuffer(dev, buffer, nullptr);
+        } else {
+            std::printf("      guest host import probe: buffer creation failed (%d)\n", int(result));
+        }
+    } else {
+        std::printf("      guest host import probe: pointer query failed (%d)\n", int(result));
+    }
+    VirtualFree(allocation, 0, MEM_RELEASE);
+    vkDestroyDevice(dev, nullptr);
+}
+
 // out[i] = i * 3 + add, 4096 values, on the device's first compute queue; the values it got wrong (-1: a call failed)
 static int fill(VkInstance instance, VkPhysicalDevice phys, uint32_t family) {
     VKF(vkCreateDevice);
@@ -518,6 +598,8 @@ int main(int argc, char** argv) {
             if (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT) family = i;
         CHECK(family != UINT32_MAX, "device: a compute queue");
         if (family == UINT32_MAX) continue;
+        if (has(dext, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME))
+            report_host_import(instance, phys, family, f12.bufferDeviceAddress);
         if (!f13.dynamicRendering || !f13.synchronization2 || !f12.timelineSemaphore) continue;
 
         int wrong = -1;

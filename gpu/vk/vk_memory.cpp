@@ -476,6 +476,14 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     const uint32_t type = host_import::coherent_type(hp.memoryTypeBits, req.memoryTypeBits, dev.memory,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (req.size > bytes || type == UINT32_MAX) {
+        static std::atomic<unsigned> diagnostics{0};
+        if (type == UINT32_MAX && diagnostics.fetch_add(1, std::memory_order_relaxed) < 4) {
+            logf("vk: host import memory types: pointer %#x, buffer %#x, count %u",
+                 hp.memoryTypeBits, req.memoryTypeBits, dev.memory.memoryTypeCount);
+            for (uint32_t i = 0; i < dev.memory.memoryTypeCount; ++i)
+                logf("vk: memory type %u: flags %#x, heap %u", i, dev.memory.memoryTypes[i].propertyFlags,
+                     dev.memory.memoryTypes[i].heapIndex);
+        }
         destroy_import_buffer(p.buffer);
         p.buffer = VK_NULL_HANDLE;
         host_import_failed(lo, hi, req.size > bytes ? "buffer memory requirement exceeds guest range" :
