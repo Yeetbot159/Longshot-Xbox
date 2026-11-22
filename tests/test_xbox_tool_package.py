@@ -64,7 +64,7 @@ sys.path.insert(0, sys.argv[1] + r'\\nx2')
 sys.path.insert(0, sys.argv[1] + r'\\third_party\\a64-kit\\lift')
 import a64emit, zbic
 with mock.patch('subprocess.run', side_effect=AssertionError('unexpected helper rebuild')):
-    items = [(i * 4, 0xd503201f) for i in range(9000)]
+    items = [(i * 4, 0xd503201f) for i in range(250000)]
     desktop = a64emit.translate(items)
     os.environ['LONGSHOT_XBOX'] = '1'
     xbox = a64emit.translate(items)
