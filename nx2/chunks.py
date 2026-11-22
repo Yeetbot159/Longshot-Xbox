@@ -329,13 +329,17 @@ def write(L, gen_dir, img_dir, rechunk=False, counters=(), jobs=None, took=None)
         if got is None or got[0] != e:
             raise SystemExit("chunks: write() asked for f_%08x, the emit made %s" % (e, "f_%08x" % got[0] if got else "nothing"))
         return got[1], got[2]
-    L.emit_function = emit_function
-    try:
-        files = L.write(gen_dir, chunk_bytes=b)
-    finally:
-        del L.emit_function
-        if made is not None:
-            made.close()   # (the processes go now, not when the generator is collected)
+    if os.environ.get("LONGSHOT_XBOX", "").strip().lower() not in ("", "0", "false", "off", "no"):
+        import xbox_lift_write
+        files = xbox_lift_write.write(L, gen_dir, b)
+    else:
+        L.emit_function = emit_function
+        try:
+            files = L.write(gen_dir, chunk_bytes=b)
+        finally:
+            del L.emit_function
+            if made is not None:
+                made.close()   # (the processes go now, not when the generator is collected)
     took("emit and write (%d process%s)" % (procs, "" if procs == 1 else "es"))
     # (the numbered chunks only: files has code_hot.c too, and counting it skipped the first stale chunk, linked twice)
     n = sum(1 for f in files if re.fullmatch(r"code_\d{3}\.c", os.path.basename(f)))

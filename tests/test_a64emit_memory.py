@@ -2,7 +2,9 @@
 
 python -I -B tests/test_a64emit_memory.py
 """
+import ast
 import ctypes
+import itertools
 import os
 import sys
 from pathlib import Path
@@ -53,7 +55,27 @@ def translate_with(environment, items):
     return native.batch_sizes
 
 
+def test_coverage_batches():
+    source = (ROOT / "nx2" / "lift.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "unhandled_words")
+    namespace = {"itertools": itertools, "a64emit": a64emit}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "lift.py", "exec"), namespace)
+    calls = []
+
+    def translate(items):
+        calls.append(len(items))
+        return ["generated C"] * len(items), [a64emit.UNHANDLED if w % 7 == 0 else 0 for _, w in items]
+
+    keys = {w: 100000 + w for w in range(20000)}
+    with mock.patch.object(a64emit, "translate", side_effect=translate):
+        bad = namespace["unhandled_words"](keys)
+    if calls != [8192, 8192, 3616] or bad != {w for w in keys if w % 7 == 0}:
+        raise AssertionError("coverage batching changed the unhandled words: %r" % calls)
+
+
 def main():
+    test_coverage_batches()
     xbox_batches = translate_with({"LONGSHOT_XBOX": "1"}, [(i, i) for i in range(9000)])
     if xbox_batches != [4096, 4096, 808]:
         raise AssertionError("Xbox batches exceeded the memory bound: %r" % xbox_batches)

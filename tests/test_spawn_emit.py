@@ -240,6 +240,46 @@ class SpawnEmitTests(unittest.TestCase):
         for n in needles:
             self.assertTrue(any(n in t for t in texts.values()), "%r is in no file: the made-up image does not reach it" % n)
 
+    def test_xbox_bounded_writer_matches_existing_writer(self):
+        import insn
+        import poll
+
+        class CountingCache(dict):
+            def __init__(self):
+                super().__init__()
+                self.cleared_sizes = []
+
+            def clear(self):
+                self.cleared_sizes.append(len(self))
+                super().clear()
+
+        insn.install()
+        poll.install()
+        hot = os.path.join(self.tmp.name, "hot.txt")
+        with open(hot, "w") as f:
+            f.write("f_%08x\n" % BASE)
+        settings = {"A64_LOCAL_REGS": "4", "A64_LOCAL_FLAGS": "1", "A64_HOT_FUNCS": hot, "A64_HOT_CHUNK": "1"}
+        with mock.patch.dict(os.environ, settings):
+            os.environ.pop("LONGSHOT_XBOX", None)
+            poll.stats["functions"] = poll.stats["polls"] = 0
+            one_dir = self.folder("xbox-base")
+            one = write(1, one_dir, comments=True, counters=[poll.stats])
+            os.environ["LONGSHOT_XBOX"] = "1"
+            poll.stats["functions"] = poll.stats["polls"] = 0
+            xbox_dir = self.folder("xbox-bounded")
+            flags, regs = CountingCache(), CountingCache()
+            with mock.patch.object(a64_lift, "_flag_masks", flags), mock.patch.object(a64_lift, "_reg_writes", regs):
+                xbox = write(1, xbox_dir, comments=True, counters=[poll.stats])
+            for cache in (flags, regs):
+                self.assertGreater(len(cache.cleared_sizes), 1)
+                self.assertTrue(any(cache.cleared_sizes))
+                self.assertFalse(cache)
+        self.assertEqual(one[0], xbox[0])
+        self.assertEqual(one[1], xbox[1])
+        for name in ("functions.txt", "chunks.txt"):
+            self.assertEqual(Path(one_dir, name).read_bytes(), Path(xbox_dir, name).read_bytes(), name)
+        self.assertIn("code_hot.c", xbox[0])
+
     def test_spawned_processes_write_what_one_writes(self):
         import poll
         # the lift's plain configuration (--no-polls)

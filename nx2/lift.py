@@ -16,6 +16,7 @@ Usage:  python -I nx2/lift.py [--exefs <dir>] [--work <dir>] [--write] [--max-fu
 import argparse
 import collections
 import glob
+import itertools
 import json
 import os
 import struct
@@ -53,6 +54,20 @@ def module_of(img, pc):
     return "?"
 
 
+def unhandled_words(keys):
+    """Translate unique words in bounded batches without retaining their generated C."""
+    bad = set()
+    items = iter(keys.items())
+    while True:
+        batch = list(itertools.islice(items, 8192))
+        if not batch:
+            break
+        texts, flags = a64emit.translate([(pc, w) for w, pc in batch])
+        bad.update(w for (w, _), flag in zip(batch, flags) if flag & a64emit.UNHANDLED)
+        del texts, flags
+    return bad
+
+
 def coverage(L, img, out_dir):
     """Per-module: functions, instructions, untranslated words; and the share of functions that translate fully."""
     keys = {}
@@ -60,9 +75,8 @@ def coverage(L, img, out_dir):
         for pc, (k, w) in body.items():
             if k[0] == "op":
                 keys.setdefault(w, pc)
-    words = list(keys)
-    _, flags = a64emit.translate([(keys[w], w) for w in words])
-    bad = {w for w, f in zip(words, flags) if f & a64emit.UNHANDLED}
+    bad = unhandled_words(keys)
+    del keys
     # UDF and unallocated encodings trap on the hardware too (code falls into them after noreturn calls): the
     # lifter's trap is their exact translation, so they do not count against coverage
     md = capstone.Cs(capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM)
@@ -193,6 +207,10 @@ def main():
         gen = os.path.join(out_dir, "gen")
         files = chunks.write(L, gen, os.path.join(a.work, "image"), a.rechunk and not a.standalone,
                              counters=[] if a.no_polls else [poll.stats], took=took)
+        xbox = kit.env_on("LONGSHOT_XBOX")
+        if xbox:
+            L.report()
+            del L.funcs
         import oot_patches
         main_build = next((m["build_id"] for m in meta["modules"] if m["name"] == "main"), "")
         def tables():   # (the runtime tables and the standalone files: they read the image, not the lifted C)
@@ -211,7 +229,12 @@ def main():
         chunks.edit_c(gen, L.stats, a.standalone and main_build == oot_patches.LIFE_BUILD_ID, whole=not a.max_func, took=took)
         print("\n".join(chunks.end_side(side, tables)), flush=True)
         took("runtime tables and standalone files (beside the edits)" if side else "runtime tables and standalone files")
-        L.report()
+        if xbox:
+            if L.stats["stores"]:
+                print("page marks: %d groups share one mark for %d of %d stores through a base register" % (
+                    L.stats["groups"], L.stats["grouped_stores"], L.stats["stores"]))
+        else:
+            L.report()
         if L.stats["entry_gotos"]:   # (nx2/lift_fixes.py, 4)
             print("functions with code below their entry, started at it by a goto: %d" % L.stats["entry_gotos"])
         print("interrupt polls: %d loop headers in %d functions" % (poll.stats["polls"], poll.stats["functions"]))
