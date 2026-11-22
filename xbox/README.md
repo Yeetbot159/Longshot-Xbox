@@ -224,6 +224,10 @@ for untranslated upscaling networks. The experiment did not preserve GPU writes 
 it is not a guest-memory fallback. Correctly handling unsupported index buffers and guest-memory access remains necessary.
 The existing quad-to-triangle conversion can now run even without native 8-bit indices, but a subsequent capped run
 showed that the skipped 8-bit draws were six-index triangles, not quads. It still recorded no draws.
+With temporary CPU copies of read-only bindings and direct, non-restarting 8-bit indices, a further capped PC run
+reached the title screen and reported two draws per frame. Those copies do not preserve GPU writes or submission
+coherence and were removed after the experiment. This is not a playable or Xbox-validated renderer; a correct
+GPU-coherent memory path and 8-bit index conversion are still needed.
 
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
