@@ -67,6 +67,14 @@ std::string narrow(std::wstring_view w) {
 
 std::string hr_text(HRESULT hr) { return fmt("0x%08X", (unsigned)hr); }
 
+std::string allocation_info(const void* ptr) {
+    MEMORY_BASIC_INFORMATION info{};
+    if (!ptr || !VirtualQuery(ptr, &info, sizeof info)) return fmt("VirtualQuery failed (%lu)", GetLastError());
+    return fmt("ptr=%p base=%p region=%llu state=0x%lx protect=0x%lx type=0x%lx", ptr, info.AllocationBase,
+               (unsigned long long)info.RegionSize, (unsigned long)info.State, (unsigned long)info.Protect,
+               (unsigned long)info.Type);
+}
+
 // ---- the report ------------------------------------------------------------------------------------------------
 
 struct Entry { std::string section, key, value; };
@@ -1039,8 +1047,35 @@ void probe_d3d12() {
 
     uint8_t* plain = static_cast<uint8_t*>(pVirtualAlloc ? pVirtualAlloc(nullptr, 16 * MB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) : nullptr);
     if (plain) {
+        R.add("host import allocation (VirtualAlloc)", allocation_info(plain));
+        R.flush();
         existing_heap_test(g, plain, "host memory import (ordinary allocation)", pso.get(), rs.get());
         existing_heap_test_v13(g, plain, "Dozen host import API (ordinary allocation)", pso.get(), rs.get());
+    }
+    if (auto vafa = kfn<VirtualAllocFromApp_t>("VirtualAllocFromApp")) {
+        auto* app = static_cast<uint8_t*>(vafa(nullptr, 16 * MB, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+        if (app) {
+            R.add("host import allocation (VirtualAllocFromApp)", allocation_info(app));
+            R.flush();
+            existing_heap_test(g, app, "host memory import (VirtualAllocFromApp)", pso.get(), rs.get());
+            existing_heap_test_v13(g, app, "Dozen host import API (VirtualAllocFromApp)", pso.get(), rs.get());
+            pVirtualFree(app, 0, MEM_RELEASE);
+        } else {
+            R.add("host import allocation (VirtualAllocFromApp)", fmt("failed (%lu)", GetLastError()));
+        }
+    }
+    if (auto va2fa = kfn<VirtualAlloc2FromApp_t>("VirtualAlloc2FromApp")) {
+        auto* app2 = static_cast<uint8_t*>(va2fa(GetCurrentProcess(), nullptr, 16 * MB, MEM_RESERVE | MEM_COMMIT,
+                                                PAGE_READWRITE, nullptr, 0));
+        if (app2) {
+            R.add("host import allocation (VirtualAlloc2FromApp)", allocation_info(app2));
+            R.flush();
+            existing_heap_test(g, app2, "host memory import (VirtualAlloc2FromApp)", pso.get(), rs.get());
+            existing_heap_test_v13(g, app2, "Dozen host import API (VirtualAlloc2FromApp)", pso.get(), rs.get());
+            pVirtualFree(app2, 0, MEM_RELEASE);
+        } else {
+            R.add("host import allocation (VirtualAlloc2FromApp)", fmt("failed (%lu)", GetLastError()));
+        }
     }
     R.flush();
     if (g_guest) {

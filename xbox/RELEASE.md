@@ -29,6 +29,8 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
   processes still need manual cleanup.
 - Reduced Xbox instruction-translation batch size and copied only populated native output bytes to lower peak memory
   during the lift after the latest console build stopped with `MemoryError`.
+- Expanded the capability probe to compare D3D12 host-heap import across `VirtualAlloc`, `VirtualAllocFromApp`, and
+  `VirtualAlloc2FromApp`, including the allocation region metadata needed to diagnose the remaining renderer blocker.
 - Xbox builds default to one lift worker and apply the compiler memory estimate before starting a second compiler.
   An oversized first compiler can still run; neither setting is a hard memory cap, and console validation is pending.
 - The launcher directs the game and renderer to the built game folder for caches and logs while keeping the selected
