@@ -667,12 +667,21 @@ bool memory_init() {
     VkPhysicalDeviceVulkan11Properties p11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
     VkPhysicalDeviceVulkan13Properties p13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
     hp.pNext = &p11;
-    p11.pNext = &p13;
+    const bool has_buffer_limit = dev.props.apiVersion >= VK_API_VERSION_1_3;
+    if (has_buffer_limit) p11.pNext = &p13;
     p2.pNext = &hp;
     vkGetPhysicalDeviceProperties2(dev.physical, &p2);
     align = std::max<uint64_t>(hp.minImportedHostPointerAlignment, 4096);
-    max_import_size = std::min(p11.maxMemoryAllocationSize, p13.maxBufferSize);
-    logf("vk: guest memory imported in place (alignment %llu)", (unsigned long long)align);
+    max_import_size = host_import::allocation_limit(p11.maxMemoryAllocationSize, p13.maxBufferSize, has_buffer_limit);
+    if (!max_import_size) {
+        logf("vk: invalid guest import limits (allocation %llu, buffer %llu, buffer limit %s)",
+             (unsigned long long)p11.maxMemoryAllocationSize, (unsigned long long)p13.maxBufferSize,
+             has_buffer_limit ? "available" : "unavailable");
+        return false;
+    }
+    logf("vk: guest memory imported in place (alignment %llu, maximum allocation %llu MB%s)",
+         (unsigned long long)align, (unsigned long long)(max_import_size >> 20),
+         has_buffer_limit ? "" : "; no Vulkan 1.3 buffer limit");
     return true;
 }
 
@@ -3040,7 +3049,7 @@ Pool* pool_lookup(uint64_t guest, uint64_t size) {
             static double total_ms;
             static int n, logged;
             total_ms += ms, n++;
-            if ((ms >= 2.0 && logged++ < 200) || n % 256 == 0)
+            if (ok && ((ms >= 2.0 && logged++ < 200) || n % 256 == 0))
                 logf("vk: pool %#llx+%#llx imported in %.1f ms as %#llx..%#llx (%d imports, %.0f ms in all)",
                      (unsigned long long)range.lo, (unsigned long long)(range.hi - range.lo), ms, (unsigned long long)lo,
                      (unsigned long long)hi, n, total_ms);

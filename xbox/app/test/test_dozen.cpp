@@ -17,6 +17,7 @@
 
 #include "../dcomp_shim.h"
 #include "../modules.h"
+#include "../../../gpu/vk/host_import_type.h"
 #include "fill_spv.h"
 
 namespace mod = longshot_xbox::modules;
@@ -387,6 +388,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "usage: test_dozen <folder with vulkan_dzn.dll, dxil.dll, longshot_tls.dll>\n");
         return 2;
     }
+    CHECK(mkwvk::host_import::allocation_limit(2048, 0, false) == 2048 &&
+          mkwvk::host_import::allocation_limit(2048, 1024, true) == 1024 &&
+          mkwvk::host_import::allocation_limit(2048, 4096, true) == 2048 &&
+          mkwvk::host_import::allocation_limit(2048, 0, true) == 0 &&
+          mkwvk::host_import::allocation_limit(0, 1024, true) == 0,
+          "guest import limits with and without Vulkan 1.3 buffer limits");
     mod::Config cfg;
     {
         const std::string a = argv[1];
@@ -453,6 +460,15 @@ int main(int argc, char** argv) {
                     p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? "software (WARP)" : "hardware");
         if (p.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU) continue;   // (WARP: the console has no such device)
         CHECK(drv.driverID == VK_DRIVER_ID_MESA_DOZEN, "the driver is Dozen");
+        VkPhysicalDeviceVulkan11Properties p11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_PROPERTIES};
+        VkPhysicalDeviceVulkan13Properties p13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_PROPERTIES};
+        if (p.apiVersion >= VK_API_VERSION_1_3) p11.pNext = &p13;
+        VkPhysicalDeviceProperties2 limits{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        limits.pNext = &p11;
+        vkGetPhysicalDeviceProperties2(phys, &limits);
+        std::printf("      import limits: allocation %llu, buffer %llu%s\n",
+                    (unsigned long long)p11.maxMemoryAllocationSize, (unsigned long long)p13.maxBufferSize,
+                    p.apiVersion >= VK_API_VERSION_1_3 ? "" : " (unavailable on Vulkan 1.2)");
 
         VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
         VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};

@@ -207,6 +207,10 @@ pipeline states; graphics pipeline creation faulted. A static-state fallback is 
 the game. The run also later hit the job memory limit and exited with a stack overflow. Neither result proves the
 cause of the separate Xbox crash.
 
+On Vulkan 1.2, guest imports use the reported allocation limit rather than an unavailable Vulkan 1.3 buffer limit.
+This removes a zero-limit rejection, but the tested PC Dozen driver still reports no compatible coherent memory type
+for guest host-pointer imports. Draws requiring those imports are skipped; this does not fix the black frames.
+
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.
 
