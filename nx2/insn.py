@@ -19,6 +19,7 @@ Model:
   - Pointer authentication is the identity, as in Eglantine's dynarmic: PAC*/AUT* (register forms) and XPAC* leave
     Xd unchanged, PACGA writes 0. Nothing in the game's own code can tell, since no pointer is ever signed.
   - MTE: tags are always 0. STG/ST2G only do their base-register writeback.
+  - SDIV: handle the AArch64 signed overflow case, which otherwise traps in suyu's generated x86 code.
 """
 import ctypes
 
@@ -145,6 +146,18 @@ def stg(w):
         return "/* stg: memory tags are not modelled */"
     return "c->x[%d] += (uint64_t)(int64_t)%d; /* st%sg, writeback: tags are not modelled */" % (
         rn, imm, "2" if opc == 2 else "")
+
+
+def sdiv(w):
+    """Signed division with AArch64's wrapping result for INT_MIN / -1."""
+    sf, rm, rn, rd = w >> 31, (w >> 16) & 31, (w >> 5) & 31, w & 31
+    if rd == 31:
+        return None
+    if sf:
+        return ("{ int64_t _a=(int64_t)%s,_b=(int64_t)%s; "
+                "c->x[%d]=(uint64_t)(_b==-1?(int64_t)(0-(uint64_t)_a):_b?_a/_b:0); }" % (xr(rn), xr(rm), rd))
+    return ("{ int32_t _a=(int32_t)(uint32_t)%s,_b=(int32_t)(uint32_t)%s; "
+            "c->x[%d]=(uint64_t)(uint32_t)(_b==-1?(int32_t)(0u-(uint32_t)_a):_b?_a/_b:0); }" % (xr(rn), xr(rm), rd))
 
 
 # ---- the few SIMD forms suyu lacks that MKW's sdk uses (62 sites) -------------------------------------
@@ -274,6 +287,8 @@ def emit(w):
         return "/* pac/aut: pointer authentication is the identity */"
     if (w & 0xFF200000) == 0xD9200000:
         return stg(w)
+    if (w & 0x7FE0FC00) == 0x1AC00C00:
+        return sdiv(w)
     return None
 
 
