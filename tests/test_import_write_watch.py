@@ -25,25 +25,32 @@ CPP = r"""
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-static int queries, allocations, forced, faults, bad;
-static bool fail_full;
+static int queries, allocations, forced, faults, bad, errors;
+static bool fail_full, fail_reserved, fail_query;
 static uint8_t* base;
 static SIZE_T page;
+enum { VK_ERROR_UNKNOWN = -13 };
+static void host_import_failed(uint64_t, uint64_t, const char*, int) { errors++; }
 #define CHECK(c) do { if (!(c)) { printf("FAIL line %d: %s\n", __LINE__, #c); bad++; } } while (0)
 static LPVOID tracked_alloc(LPVOID p, SIZE_T n, DWORD type, DWORD protect) {
     allocations++;
     if (fail_full && p == base && n == page * 2 && type == MEM_COMMIT) {
         fail_full = false; forced++; SetLastError(ERROR_NOT_ENOUGH_MEMORY); return nullptr;
     }
+    if (fail_reserved && p == base + page && type == MEM_COMMIT) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY); return nullptr;
+    }
     return VirtualAlloc(p, n, type, protect);
 }
 static SIZE_T tracked_query(LPCVOID p, PMEMORY_BASIC_INFORMATION info, SIZE_T n) {
-    queries++; return VirtualQuery(p, info, n);
+    queries++; return fail_query ? 0 : VirtualQuery(p, info, n);
 }
 #define VirtualAlloc tracked_alloc
 #define VirtualQuery tracked_query
-static void commit(uint8_t* ptr, uint64_t bytes) {
+static bool commit(uint8_t* ptr, uint64_t bytes) {
+    const uint64_t lo = 0, hi = bytes;
 COMMIT
+    return true;
 }
 #undef VirtualAlloc
 #undef VirtualQuery
@@ -59,6 +66,8 @@ static LONG CALLBACK writer(EXCEPTION_POINTERS* e) {
 int main(int argc, char** argv) {
     const bool watch = argc > 1 && !strcmp(argv[1], "watch");
     const bool fallback = argc > 1 && !strcmp(argv[1], "fallback");
+    const bool fail_commit = argc > 1 && !strcmp(argv[1], "fail-commit");
+    const bool fail_lookup = argc > 1 && !strcmp(argv[1], "fail-query");
     SYSTEM_INFO si{}; GetSystemInfo(&si); page = si.dwPageSize;
     base = (uint8_t*)VirtualAlloc(nullptr, page * 4, MEM_RESERVE, PAGE_NOACCESS);
     if (!base) return 2;
@@ -66,8 +75,18 @@ int main(int argc, char** argv) {
     memset(base, 0x5a, page);
     DWORD old;
     if (watch && !VirtualProtect(base, page, PAGE_READONLY, &old)) { VirtualFree(base, 0, MEM_RELEASE); return 2; }
-    fail_full = fallback;
-    commit(base, page * 2);
+    fail_full = fallback || fail_commit || fail_lookup;
+    fail_reserved = fail_commit;
+    fail_query = fail_lookup;
+    const bool committed = commit(base, page * 2);
+    if (fail_commit || fail_lookup) {
+        CHECK(!committed && errors == 1 && forced == 1);
+        MEMORY_BASIC_INFORMATION untouched{};
+        CHECK(VirtualQuery(base + page, &untouched, sizeof untouched) == sizeof untouched && untouched.State == MEM_RESERVE);
+        VirtualFree(base, 0, MEM_RELEASE);
+        return bad ? 1 : 0;
+    }
+    CHECK(committed && errors == 0);
     MEMORY_BASIC_INFORMATION a{}, b{}, outside{};
     CHECK(VirtualQuery(base, &a, sizeof a) == sizeof a);
     CHECK(VirtualQuery(base + page, &b, sizeof b) == sizeof b);
@@ -109,10 +128,11 @@ def main():
     with tempfile.TemporaryDirectory(prefix="import-write-watch-") as tmp:
         tmp = Path(tmp)
         cpp, exe = tmp / "test.cpp", tmp / "test.exe"
-        cpp.write_text(CPP.replace("COMMIT\n}", commit + "\n}"), encoding="utf-8")
+        cpp.write_text(CPP.replace("COMMIT\n", commit), encoding="utf-8")
         subprocess.run([args.cxx, "-std=c++20", "-O1", "-w", str(cpp), "-o", str(exe)], check=True, timeout=120)
         clean = {k: v for k, v in os.environ.items() if k not in WATCHES}
-        cases = [("default", [], clean), ("fallback", ["fallback"], clean)]
+        cases = [("default", [], clean), ("fallback", ["fallback"], clean),
+                 ("fail-commit", ["fail-commit"], clean), ("fail-query", ["fail-query"], clean)]
         cases += [(key, ["watch"], clean | {key: value}) for key, value in WATCHES.items()]
         failed = []
         for name, argv, env in cases:

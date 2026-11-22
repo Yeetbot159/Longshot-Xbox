@@ -41,6 +41,7 @@ def main():
     cases = [(route, case) for route in ["host", "dma"] for case in [
         "healthy", "create-error", "allocate-error", "host-oom", "device-oom", "unknown-bind"]]
     cases += [("host", "hold-retry"), ("host", "properties-error"), ("dma", "sparse-delegation"), ("dma", "nvidia")]
+    cases += [("host", case) for case in ["commit-error", "query-error", "free-pages", "bad-region"]]
     cases += [("host", case) for case in ["buffer-type-mismatch", "host-type-mismatch", "coherent-mismatch",
                                           "too-small-range", "per-pointer-query", "highest-memory-type", "no-bda"]]
     with tempfile.TemporaryDirectory(prefix="import-buffer-binding-") as temp:

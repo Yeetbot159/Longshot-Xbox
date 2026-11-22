@@ -19,7 +19,7 @@ namespace fixture {
 namespace host_import = mkwvk::host_import;
 template<class T> T handle(uintptr_t n) { return reinterpret_cast<T>(n); }
 enum { HostMemory, DmaMemory, EveryMemory };
-enum class Fault { None, Create, Allocate, HostOOM, DeviceOOM, Unknown, Properties };
+enum class Fault { None, Create, Allocate, HostOOM, DeviceOOM, Unknown, Properties, Commit, Query, FreePages, BadRegion };
 Fault fault = Fault::None;
 int fail_kind = EveryMemory, allocation_kind = HostMemory;
 struct Pool {
@@ -58,8 +58,15 @@ bool env_on(const char* name) { const char* v = getenv(name); return v && !env_v
 using SIZE_T = size_t;
 constexpr int MEM_COMMIT = 1, MEM_RESERVE = 2, PAGE_READWRITE = 4;
 struct MEMORY_BASIC_INFORMATION { uint8_t* BaseAddress; size_t RegionSize; int State; };
-void* VirtualAlloc(void* p, size_t, int, int) { return p; }
-size_t VirtualQuery(void*, MEMORY_BASIC_INFORMATION*, size_t) { return 0; }
+void* VirtualAlloc(void* p, size_t, int, int) {
+    return fault == Fault::Commit || fault == Fault::Query || fault == Fault::FreePages || fault == Fault::BadRegion ? nullptr : p;
+}
+size_t VirtualQuery(void* p, MEMORY_BASIC_INFORMATION* info, size_t n) {
+    if (fault == Fault::Query) return 0;
+    *info = {static_cast<uint8_t*>(p), fault == Fault::BadRegion ? 0u : 4096u,
+             fault == Fault::FreePages ? 0 : MEM_RESERVE};
+    return n;
+}
 VkResult vkGetMemoryHostPointerPropertiesEXT(VkDevice, VkExternalMemoryHandleTypeFlagBits, const void*, VkMemoryHostPointerPropertiesEXT* hp) {
     property_queries++;
     if (fault == Fault::Properties) return VK_ERROR_OUT_OF_HOST_MEMORY;
@@ -155,6 +162,10 @@ void run(const std::string& route, const std::string& test) {
     if (test == "device-oom" || test == "dma-bind-fallback" || test == "both-bind-fail" || test == "hold-retry") fault = Fault::DeviceOOM;
     if (test == "unknown-bind") fault = Fault::Unknown;
     if (test == "properties-error") fault = Fault::Properties;
+    if (test == "commit-error") fault = Fault::Commit;
+    if (test == "query-error") fault = Fault::Query;
+    if (test == "free-pages") fault = Fault::FreePages;
+    if (test == "bad-region") fault = Fault::BadRegion;
     if (test == "buffer-type-mismatch") buffer_types = 2;
     if (test == "host-type-mismatch") host_types = 2;
     if (test == "coherent-mismatch") dev.memory.memoryTypes[0].propertyFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
@@ -192,6 +203,13 @@ void run(const std::string& route, const std::string& test) {
         return;
     }
     const bool success = call(route, p);
+    if (test == "commit-error" || test == "query-error" || test == "free-pages" || test == "bad-region") {
+        assert(!success && !p.buffer && !p.memory && property_queries == 0 && creates == 0 && allocations == 0);
+        assert(import_result == VK_ERROR_UNKNOWN);
+        assert(import_on_hold(0, 4096));
+        empty();
+        return;
+    }
     assert(owner_releases == destroyed_buffers);   // Every factory rollback preserves main's owner hook.
     if (test == "no-bda") {
         assert(success && p.buffer && p.memory && !p.address && address_queries == 0);

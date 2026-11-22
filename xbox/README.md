@@ -234,7 +234,9 @@ job limit before a gameplay frame or game save was verified. Reducing the AV1 de
 capture-buffer prewarming did not prevent the crash. One debugger run reported 2,574 MB committed in the guest
 window and 587 MB for the loaded game module near a stack overflow; another located the exception in the renderer's
 stack-probe routine. Memory pressure was observed, but the precise cause of the stack overflow is not established.
-These are headless PC diagnostics, not a console test.
+Guest imports now stop and report an error if their page-commit walk fails instead of passing an incompletely committed
+range to Vulkan. That guard does not resolve the memory pressure or the missing import fallback. These are headless PC
+diagnostics, not a console test.
 
 The upstream page-table flush optimization streams overlapping updates in bounded batches instead of sorting every
 individual page. It applies to the BDA guest-page-table path; the Series S no-BDA path does not use that table.

@@ -440,9 +440,19 @@ bool import_pool(uint64_t lo, uint64_t hi, Pool& p) {
     if (page_watches || VirtualAlloc(ptr, (SIZE_T)bytes, MEM_COMMIT, PAGE_READWRITE) != ptr)
         for (uint8_t* q = ptr; q < ptr + bytes;) {
             MEMORY_BASIC_INFORMATION mi{};
-            if (VirtualQuery(q, &mi, sizeof mi) != sizeof mi) break;
+            if (VirtualQuery(q, &mi, sizeof mi) != sizeof mi) {
+                host_import_failed(lo, hi, "VirtualQuery guest pages", VK_ERROR_UNKNOWN);
+                return false;
+            }
             uint8_t* end = std::min((uint8_t*)mi.BaseAddress + mi.RegionSize, ptr + bytes);
-            if (mi.State == MEM_RESERVE) VirtualAlloc(q, (size_t)(end - q), MEM_COMMIT, PAGE_READWRITE);
+            if (end <= q || (mi.State != MEM_RESERVE && mi.State != MEM_COMMIT)) {
+                host_import_failed(lo, hi, "guest pages are not reserved or committed", VK_ERROR_UNKNOWN);
+                return false;
+            }
+            if (mi.State == MEM_RESERVE && VirtualAlloc(q, (size_t)(end - q), MEM_COMMIT, PAGE_READWRITE) != q) {
+                host_import_failed(lo, hi, "commit guest pages", VK_ERROR_UNKNOWN);
+                return false;
+            }
             q = end;
         }
 #ifdef __linux__
