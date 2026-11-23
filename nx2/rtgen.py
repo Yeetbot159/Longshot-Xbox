@@ -57,7 +57,8 @@ MARK_NATIVE = r"""extern uint8_t a64_dirty[1u << 20];
    game threads +1.1 ms a frame, the code 18 MB bigger. Not kept.) */
 #define A64_MARK(a, n) (__atomic_store_n(&a64_dirty[(uint32_t)(a) >> 12], 1, __ATOMIC_RELEASE), \
                         __atomic_store_n(&a64_dirty[(uint32_t)((a) + (n) - 1) >> 12], 1, __ATOMIC_RELEASE))"""
-MARK_NATIVE_64 = r"""extern uint8_t a64_dirty[A64_DIRTY_PAGES];
+MARK_NATIVE_64 = r"""extern uint8_t *a64_dirty;   /* (a64_rt.c) reserved, committed as pages of it are stored to */
+void a64_dirty_init(void);
 /* (Tried 2026-10-21: reading a mark first and writing it only when clear, against cache lines moving between cores:
    game threads +1.1 ms a frame, the code 18 MB bigger. Not kept.) */
 #define A64_DIRTY_AT(a) (((uint64_t)(a) >> 12) & (A64_DIRTY_PAGES - 1))
@@ -75,7 +76,36 @@ SUBST = {
     "a64_rt.c": [
         (LOOKUP, "#if A64_ADDR64\n    if (addr >> 32) return NULL;   /* (code lies below 4 GB: never a truncated match) */\n"
                  "#endif\n" + LOOKUP),
-        ("uint8_t a64_dirty[1u << 20];", "uint8_t a64_dirty[A64_DIRTY_PAGES];"),
+        ("uint8_t a64_dirty[1u << 20];", r"""/* One byte per guest page of the 512 GB window is 128 MB. A static array is charged to the Windows
+   commit in full, beside a 5 GB job that the forest already fills. The table is reserved and a page of it
+   (16 MB of guest addresses) is committed on the first store or scan that touches it. */
+#if defined(_WIN32)
+uint8_t *a64_dirty;
+static LONG CALLBACK a64_dirty_fault(EXCEPTION_POINTERS *ep) {
+    if (!ep || !ep->ExceptionRecord || ep->ExceptionRecord->ExceptionCode != EXCEPTION_ACCESS_VIOLATION)
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (ep->ExceptionRecord->NumberParameters < 2 || !a64_dirty) return EXCEPTION_CONTINUE_SEARCH;
+    const uintptr_t addr = (uintptr_t)ep->ExceptionRecord->ExceptionInformation[1];
+    const uintptr_t base = (uintptr_t)a64_dirty;
+    if (addr < base || addr >= base + A64_DIRTY_PAGES) return EXCEPTION_CONTINUE_SEARCH;
+    if (!VirtualAlloc((void *)(addr & ~(uintptr_t)0xFFF), 0x1000, MEM_COMMIT, PAGE_READWRITE))
+        return EXCEPTION_CONTINUE_SEARCH;
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+void a64_dirty_init(void) {
+    if (a64_dirty) return;
+    a64_dirty = (uint8_t *)VirtualAlloc(NULL, A64_DIRTY_PAGES, MEM_RESERVE, PAGE_READWRITE);
+    if (a64_dirty) AddVectoredExceptionHandler(1, a64_dirty_fault);
+}
+__attribute__((constructor(101))) static void a64_dirty_construct(void) { a64_dirty_init(); }
+#elif defined(__EMSCRIPTEN__)
+uint8_t a64_dirty[1u << 20];
+void a64_dirty_init(void) {}
+#else
+static uint8_t a64_dirty_store[A64_DIRTY_PAGES];
+uint8_t *a64_dirty = a64_dirty_store;
+void a64_dirty_init(void) {}
+#endif"""),
     ],
 }
 

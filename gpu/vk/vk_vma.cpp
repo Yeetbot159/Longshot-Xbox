@@ -18,8 +18,28 @@
 #include "vma_heap_limits.h"
 #include "vram_compact.h"
 #include "vk_work.h"   // (last: RX_VK_RECORDER=defer drains before the destructions and the invalidate below)
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace mkwvk {
+
+uint64_t process_job_memory_limit() {
+#if defined(_WIN32)
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+    if (!QueryInformationJobObject(nullptr, JobObjectExtendedLimitInformation, &info, sizeof info, nullptr)) return 0;
+    const DWORD flags = info.BasicLimitInformation.LimitFlags;
+    uint64_t limit = 0;
+    if (flags & JOB_OBJECT_LIMIT_JOB_MEMORY) limit = (uint64_t)info.JobMemoryLimit;
+    if ((flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) && info.ProcessMemoryLimit)
+        limit = limit ? std::min(limit, (uint64_t)info.ProcessMemoryLimit) : (uint64_t)info.ProcessMemoryLimit;
+    return limit;
+#else
+    return 0;
+#endif
+}
 
 VmaAllocator vma;
 
@@ -72,7 +92,12 @@ VmaPool image_pool = VK_NULL_HANDLE;
 bool image_pool_tried = false;
 // (RX_VK_IMAGE_BLOCK_MB=<n>, 16 and up: the block's size. VMA keeps one block empty for the next image, 128 MB of VRAM that a 64 MB block
 // would halve, at twice the memory objects: the driver allows ~4096, the imported pools take ~2400)
-const uint64_t kImageBlock = (getenv("RX_VK_IMAGE_BLOCK_MB") ? (uint64_t)std::max(16, atoi(getenv("RX_VK_IMAGE_BLOCK_MB"))) : 128u) << 20;
+// A job cap of 6 GB or less (the Xbox run's 5 GB) cannot spare a 128 MB block that holds 20 MB of images.
+const uint64_t kImageBlock = [] {
+    if (const char* e = getenv("RX_VK_IMAGE_BLOCK_MB")) return (uint64_t)std::max(16, atoi(e)) << 20;
+    const uint64_t job = process_job_memory_limit();
+    return ((job && job <= (6ull << 30)) ? 32ull : 128ull) << 20;
+}();
 
 // (longshot) and the render targets' images in blocks of their own (texture_get's for a target: OoT's transient ones, made and let go
 // all the time). In the same blocks as the textures that stay, each one gone left a hole beside a texture that kept its block: the

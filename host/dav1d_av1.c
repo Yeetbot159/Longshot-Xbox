@@ -60,6 +60,15 @@ void *dav1d_av1_open(int w, int h) {
     const int logical = logical_processors();
     s.n_threads = dav1d_av1_threads(logical);
     if (env_int("HOS_DAV1D_THREADS", 0) > 0) s.n_threads = env_int("HOS_DAV1D_THREADS", 0);
+    /* A 5 GB job cannot hold dav1d's grain and extra layer buffers beside the opening's guest commit.
+       HOS_DAV1D_LOWMEM=1: one frame in flight, no film grain, the first spatial layer only. */
+    const int lowmem = env_on("HOS_DAV1D_LOWMEM");
+    if (lowmem) {
+        s.max_frame_delay = 1;
+        s.apply_grain = 0;
+        s.all_layers = 0;
+        if (s.n_threads <= 0) s.n_threads = 1;
+    }
     s.logger.callback = NULL;   /* (its messages are not the game's log) */
     Dav1dAv1 *d = (Dav1dAv1 *)calloc(1, sizeof *d);
     if (!d) return NULL;
@@ -70,8 +79,9 @@ void *dav1d_av1_open(int w, int h) {
     }
     static int logged;
     if (!logged++) {
-        if (s.n_threads) hos_log("video: AV1 on dav1d %s (%d threads; %d logical processors)", dav1d_version(), s.n_threads, logical);
-        else hos_log("video: AV1 on dav1d %s (a thread per logical core)", dav1d_version());
+        if (s.n_threads) hos_log("video: AV1 on dav1d %s (%d threads; %d logical processors%s)", dav1d_version(), s.n_threads, logical,
+                                 lowmem ? "; low memory" : "");
+        else hos_log("video: AV1 on dav1d %s (a thread per logical core%s)", dav1d_version(), lowmem ? "; low memory" : "");
     }
     return d;
 }

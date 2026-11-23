@@ -10,6 +10,7 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>
 static SRWLOCK lock = SRWLOCK_INIT;
 #define LOCK() AcquireSRWLockExclusive(&lock)
 #define UNLOCK() ReleaseSRWLockExclusive(&lock)
@@ -35,6 +36,9 @@ static uint64_t region_floor = ~0ULL;   /* the lowest region (none yet: the wind
 static uint64_t low_hole[2][2];
 
 void hos_mem_init(uint64_t image_end) {
+#if defined(A64_WRITE_TRACK) && !defined(__EMSCRIPTEN__)
+    a64_dirty_init();   /* before any guest store marks a page */
+#endif
     hos_program_size = image_end - hos_image_base;
     hos_commit(HOS_SYSTEM_BASE, HOS_SYSTEM_END - HOS_SYSTEM_BASE);
     low_hole[0][0] = 0x00100000ULL, low_hole[0][1] = HOS_SYSTEM_BASE;
@@ -210,6 +214,33 @@ void hos_mark_written(const void *p, size_t n) {
     for (uintptr_t q = a >> 12; q <= (a + n - 1) >> 12 && q < A64_DIRTY_PAGES; q++)
         __atomic_store_n(&a64_dirty[q], 1, __ATOMIC_RELEASE);
 }
+/* The table is one byte per guest page, 128 MB for the whole window. A scan that walks a wide GPU range commits
+   every page of it, and that commit is still held after the opening movies, when the Deku Tree scene needs it.
+   Pages that hold no mark are given back. The next scan commits a page again when it reads it. */
+void hos_dirty_trim(void) {
+#if defined(_WIN32)
+    if (!a64_dirty) return;
+    const uintptr_t base = (uintptr_t)a64_dirty;
+    const uintptr_t end = base + (uintptr_t)A64_DIRTY_PAGES;
+    uint64_t released = 0, committed = 0;
+    for (uintptr_t q = (base + 0xFFFF) & ~(uintptr_t)0xFFFF; q + 0x10000 <= end; q += 0x10000) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery((void *)q, &mbi, sizeof mbi)) break;
+        if (mbi.State != MEM_COMMIT) {
+            const uintptr_t next = (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+            if (next > q + 0x10000) q = (next & ~(uintptr_t)0xFFFF) - 0x10000;
+            continue;
+        }
+        committed += 0x10000;
+        const uint64_t *w = (const uint64_t *)q;
+        int used = 0;
+        for (size_t i = 0; i < 0x10000 / sizeof(uint64_t); i++) if (w[i]) { used = 1; break; }
+        if (!used && VirtualFree((void *)q, 0x10000, MEM_DECOMMIT)) released += 0x10000;
+    }
+    hos_log("mem: write-watch table %p released %llu MB of %llu MB committed",
+            (void *)a64_dirty, (unsigned long long)(released >> 20), (unsigned long long)(committed >> 20));
+#endif
+}
 #endif
 
 /* (longshot) a heap of size bytes ends below the address regions and the guest window's end (no wrap-around: the size
@@ -331,6 +362,8 @@ static void pages_report_locked(void) {
     }
 }
 
+static uint64_t mapped_page_cap(void);
+int hos_movies_finished(void);
 /* (longshot) what the game is told it uses: base (its program, and the system's share) plus the heap and its mapped pages;
    base alone with HOS_MEMINFO_OLD=1. QueryMemoryInfo below, and svc GetInfo's used memory (hos_svc.c). Never more than the
    console's total: nothing refuses AllocateMemoryPages by default (HOS_PAGES_LIMIT), and past the total the game's
@@ -342,10 +375,91 @@ uint64_t hos_used_memory(uint64_t base) {
     LOCK();
     const uint64_t mapped = mapped_bytes;
     UNLOCK();
-    const uint64_t used = base + hos_heap_size + mapped;
-    return used < hos_total_memory ? used : hos_total_memory;
+    uint64_t used = base + hos_heap_size + mapped;
+    if (used > hos_total_memory) used = hos_total_memory;
+    /* Until both opening movies have finished, tell the game it may map only the room under the cap.
+       The real free figure is over a gigabyte, and spending it at the second movie fills the job so the
+       pictures cannot be allocated. The heap is sized from this figure once, before hos_heap_size is set. */
+    if (hos_heap_size != 0 && hos_movies_finished() < 2) {
+        const uint64_t cap = mapped_page_cap();
+        if (cap != ~(uint64_t)0 && cap >= mapped) {
+            const uint64_t room = (cap - mapped) & ~((2ULL << 20) - 1);
+            if (hos_total_memory - used > room) used = hos_total_memory - room;
+        }
+    }
+    return used;
 }
 
+/* OoT's resource memory maps (total - used) before each AllocateMemoryPages. Inside a 5 GB job that
+   free figure is still over a gigabyte at the title, and the opening then commits it. HOS_MAPPED_CAP_MB
+   is the most bytes AllocateMemoryPages may hold while a movie is playing. Unset: no extra cap.
+   HOS_MAPPED_CAP_AFTER_MB, when higher, is the cap once the movie has stopped: the Deku Tree scene asks
+   for pages the movie's own cap refuses, and raising the cap during the movie fills the job so the
+   decoder drops pictures. */
+int hos_movie_active(void);
+static uint64_t mapped_page_cap(void) {
+    static uint64_t base, after;
+    static int ready;
+    if (!ready) {
+        ready = 1;
+        base = ~(uint64_t)0;
+        const char *e = getenv("HOS_MAPPED_CAP_MB");
+        if (e && *e) {
+            base = strtoull(e, NULL, 0) << 20;
+            hos_log("mem: mapped pages capped at %llu MB (HOS_MAPPED_CAP_MB)", (unsigned long long)(base >> 20));
+        }
+        const char *a = getenv("HOS_MAPPED_CAP_AFTER_MB");
+        if (a && *a) {
+            after = strtoull(a, NULL, 0) << 20;
+            if (base != ~(uint64_t)0 && after > base)
+                hos_log("mem: mapped pages capped at %llu MB once a movie is over (HOS_MAPPED_CAP_AFTER_MB)",
+                        (unsigned long long)(after >> 20));
+            else
+                after = 0;
+        }
+    }
+    if (base == ~(uint64_t)0 || !after || hos_movie_active()) return base;
+    return after;
+}
+
+/* Bytes the job can still commit. ~0 when this process is not in a limited job. */
+static uint64_t job_commit_left(void) {
+#if defined(_WIN32)
+    typedef BOOL (WINAPI *QueryJob)(HANDLE, JOBOBJECTINFOCLASS, LPVOID, DWORD, LPDWORD);
+    typedef BOOL (WINAPI *MemInfo)(HANDLE, PROCESS_MEMORY_COUNTERS *, DWORD);
+    static QueryJob query;
+    static MemInfo meminfo;
+    static int ready;
+    if (!ready) {
+        ready = 1;
+        HMODULE k = GetModuleHandleA("kernel32.dll");
+        query = (QueryJob)GetProcAddress(k, "QueryInformationJobObject");
+        meminfo = (MemInfo)GetProcAddress(k, "K32GetProcessMemoryInfo");
+    }
+    if (!query || !meminfo) return ~(uint64_t)0;
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+    memset(&info, 0, sizeof info);
+    if (!query(NULL, JobObjectExtendedLimitInformation, &info, sizeof info, NULL))
+        return ~(uint64_t)0;
+    uint64_t limit = 0;
+    const DWORD flags = info.BasicLimitInformation.LimitFlags;
+    if (flags & JOB_OBJECT_LIMIT_JOB_MEMORY) limit = (uint64_t)info.JobMemoryLimit;
+    if ((flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY) && info.ProcessMemoryLimit) {
+        const uint64_t process = (uint64_t)info.ProcessMemoryLimit;
+        limit = limit && process < limit ? process : (limit ? limit : process);
+    }
+    if (!limit) return ~(uint64_t)0;
+    PROCESS_MEMORY_COUNTERS_EX pm;
+    memset(&pm, 0, sizeof pm);
+    pm.cb = sizeof pm;
+    if (!meminfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *)&pm, sizeof pm))
+        return ~(uint64_t)0;
+    return pm.PrivateUsage < limit ? limit - (uint64_t)pm.PrivateUsage : 0;
+#else
+    return ~(uint64_t)0;
+#endif
+}
+int hos_movies_finished(void);
 /* nn::os::AllocateMemoryPages(unsigned long, unsigned long) -> Result: new pages read as zero */
 HLE(_ZN2nn2os19AllocateMemoryPagesEmm) {
     HOS_TRACE_CALL("AllocateMemoryPages");
@@ -359,12 +473,34 @@ HLE(_ZN2nn2os19AllocateMemoryPagesEmm) {
         static int limit = -1;
         if (limit < 0) limit = env_on("HOS_PAGES_LIMIT");
         LOCK();
-        if (limit && hos_heap_size + mapped_bytes + (uint64_t)pages_count_locked(a, n, 2) > hos_total_memory) {
+        const uint64_t adding = (uint64_t)pages_count_locked(a, n, 2);
+        const uint64_t map_cap = mapped_page_cap();
+        int over_cap = map_cap != ~(uint64_t)0 && mapped_bytes + adding > map_cap;
+        /* Both opening movies have finished and the next pages are the Deku Tree scene. A fixed cap
+           refused those while the job still had room, and the scene never started. Allow them while
+           the job keeps 24 MB, up to 1700 MB mapped. The decoder has already finished. A 16 MB margin
+           let the scene maps continue until the job killed the process. 48 MB left the scene's 19 MB
+           map refused while 56 MB of the job was still free, and the frame stayed two black draws. */
+        if (over_cap && hos_movies_finished() >= 2 && mapped_bytes + adding <= (1700ULL << 20)) {
+            const uint64_t left = job_commit_left();
+            if (left != ~(uint64_t)0 && left > adding + (24ULL << 20)) {
+                over_cap = 0;
+                static int told_allow;
+                if (told_allow++ < 6)
+                    hos_log("mem: scene map of %llu MB past the cap (mapped %llu MB, job %llu MB left)",
+                            (unsigned long long)(n >> 20), (unsigned long long)(mapped_bytes >> 20),
+                            (unsigned long long)(left == ~(uint64_t)0 ? 0 : left >> 20));
+            }
+        }
+        if ((limit && hos_heap_size + mapped_bytes + adding > hos_total_memory) || over_cap) {
             UNLOCK();
             static int told;
+            static uint64_t told_cap;
+            if (map_cap != told_cap) { told = 0; told_cap = map_cap; }
             if (told++ < 20)
-                hos_log("mem: AllocateMemoryPages(%#llx, %llu MB) refused: %llu MB mapped + %llu MB heap would pass the console's %llu MB",
+                hos_log("mem: AllocateMemoryPages(%#llx, %llu MB) refused: %llu MB mapped, cap %llu MB, heap %llu MB, console %llu MB",
                         (unsigned long long)a, (unsigned long long)(n >> 20), (unsigned long long)(mapped_bytes >> 20),
+                        (unsigned long long)(map_cap == ~(uint64_t)0 ? 0 : map_cap >> 20),
                         (unsigned long long)(hos_heap_size >> 20), (unsigned long long)(hos_total_memory >> 20));
             RET(0xCA01);   /* svc::ResultOutOfMemory */
             return;
@@ -380,7 +516,18 @@ HLE(_ZN2nn2os19AllocateMemoryPagesEmm) {
            when the game mapped pages over memory it already used (a heap's list lost its links). Horizon's rule
            instead: only newly mapped pages read as zero. A commit leaves committed pages as they are and gives fresh
            ones zeroed; FreeMemoryPages decommits. */
-        hos_commit(a, n);
+        if (!hos_commit(a, n)) {
+            LOCK();
+            mapped_bytes -= (uint64_t)pages_count_locked(a, n, 0);
+            pages_report_locked();
+            UNLOCK();
+            static int told_commit;
+            if (told_commit++ < 8)
+                hos_log("mem: AllocateMemoryPages(%#llx, %llu MB) not committed", (unsigned long long)a,
+                        (unsigned long long)(n >> 20));
+            RET(0xCA01);
+            return;
+        }
     } else if (zero_all || end > (1ULL << 32) || end < a) {
         memset(GP(a), 0, n);
     } else {

@@ -397,6 +397,10 @@ uint64_t device_vram_bytes();
 bool vram_usage_now(uint64_t* used, uint64_t* budget);
 void vma_log_heaps();
 void vma_log_image_blocks();   // (the image pools' blocks: what they hold, and their free ranges)
+/// Bytes the process's job may commit, or 0 when it is not in a job that has a memory cap.
+uint64_t process_job_memory_limit();
+/// Guest-window commit against everything else, so a tight job cap can be read from the log.
+void memory_log_commit_split();
 PFN_vkGetInstanceProcAddr instance_proc();   // vk_main.cpp
 /// (longshot, the Insert menu's Bug report) The device the game runs on and its driver, as the issue form asks them: "NVIDIA
 /// GeForce RTX 4090, NVIDIA 580.95.05" (vk_main.cpp; the log has only the driver's packed number)

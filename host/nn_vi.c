@@ -128,7 +128,16 @@ enum { FPS_UNCAPPED = 1000, FPS_MOVIE = 240 };   /* (FPS_MOVIE: the pacing while
    (later movies 4-86 of 1,800), game clock 0.998-1.005, picture and sound within 34 ms. A movie that stops updates for
    over MOVIE_STALE_NS is over: fps_refresh comes back to the game's cap, so play keeps the 60 the game asked for) */
 static volatile uint64_t movie_seen_at;
-static const int64_t MOVIE_STALE_NS = 250000000LL;   /* (a quarter second: three 60 fps frames of grace) */
+static const int64_t MOVIE_STALE_NS = 2000000000LL;   /* (two seconds: a 570 ms gap in the long opening counted the movie over, opened the map cap, then the movie resumed) */
+/* (longshot) 1 while a movie player has updated within MOVIE_STALE_NS. The opening's mapped-page cap stays tight
+   for that stretch: the pictures need host memory for their frames. The Deku Tree scene after the movie is allowed
+   a higher cap (HOS_MAPPED_CAP_AFTER_MB) once this is 0. */
+int hos_movie_active(void) {
+    const uint64_t seen = __atomic_load_n(&movie_seen_at, __ATOMIC_RELAXED);
+    return seen && hos_now_ns() - (int64_t)seen < MOVIE_STALE_NS;
+}
+static volatile int movies_finished;
+int hos_movies_finished(void) { return __atomic_load_n(&movies_finished, __ATOMIC_RELAXED); }
 static volatile int fps_now;   /* (the cap this present runs at, 0 before the first: fps_refresh) */
 static int fps_of(int want) { return want > 60 ? (want > FPS_UNCAPPED ? FPS_UNCAPPED : want) : 60; }
 static void fps_refresh(void) {
@@ -162,7 +171,11 @@ static void fps_refresh(void) {
     if (v == was) return;
     fps_now = v;
     if (v == FPS_MOVIE && row == 60) hos_log("vi: a movie is playing: the frame rate goes to %d for it (HOS_MOVIE_PACE=0 leaves it)", FPS_MOVIE);
-    else if (was == FPS_MOVIE && row == 60) hos_log("vi: the movie is over: back to the game's frame rate cap 60");
+    else if (was == FPS_MOVIE && row == 60) {
+        const int done = __atomic_add_fetch(&movies_finished, 1, __ATOMIC_RELAXED);
+        hos_log("vi: the movie is over: back to the game's frame rate cap 60");
+        if (done == 2) { void hos_dirty_trim(void); hos_dirty_trim(); }
+    }
     else if (v == FPS_UNCAPPED) hos_log("vi: frame rate uncapped: pacing, the game's limiter and its time step follow the frames");
     else if (v > 60) hos_log("vi: frame rate cap %d: pacing, the game's limiter and its time step follow it", v);
     else if (was) hos_log("vi: frame rate cap 60: the game's own limiter and step");

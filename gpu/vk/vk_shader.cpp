@@ -2165,10 +2165,29 @@ struct SeedStage {
 };
 struct Seed {
     std::vector<uint8_t> blob;
+    const uint8_t* view = nullptr;   // (the file mapped read-only: not charged as private commit)
+    size_t view_size = 0;
+#if defined(_WIN32)
+    HANDLE file = nullptr, mapping = nullptr;
+#endif
     std::vector<SeedStage> stages;
     std::vector<std::vector<uint32_t>> programs;
     std::unordered_map<uint64_t, uint32_t> index;   // (a stage by its code key: the pipeline state list's programs)
 } seed;
+const uint8_t* seed_data() { return seed.view ? seed.view : seed.blob.data(); }
+size_t seed_bytes() { return seed.view ? seed.view_size : seed.blob.size(); }
+void seed_unmap() {
+#if defined(_WIN32)
+    if (seed.view) UnmapViewOfFile(seed.view);
+    if (seed.mapping) CloseHandle(seed.mapping);
+    if (seed.file && seed.file != INVALID_HANDLE_VALUE) CloseHandle(seed.file);
+    seed.view = nullptr;
+    seed.view_size = 0;
+    seed.mapping = nullptr;
+    seed.file = nullptr;
+#endif
+    seed.blob.clear();
+}
 std::string beside_exe(const char* name) {
     char exe[MAX_PATH];
     const DWORD n = game_module_path(exe, MAX_PATH);
@@ -2176,8 +2195,8 @@ std::string beside_exe(const char* name) {
     return dir.substr(0, dir.find_last_of("\\/") + 1) + name;
 }
 Code stage_of_seed(const SeedStage& st) {
-    return parse_code(seed.blob.data() + st.control, std::vector<uint8_t>(seed.blob.begin() + (ptrdiff_t)st.code,
-                                                                          seed.blob.begin() + (ptrdiff_t)st.code + st.end));
+    const uint8_t* bytes = seed_data();
+    return parse_code(bytes + st.control, std::vector<uint8_t>(bytes + st.code, bytes + st.code + st.end));
 }
 /// (longshot) A seed stage that does not parse fails its program: which one, and why (the prepare's "1 failed" named nothing)
 void seed_stage_failed(const Code& c, uint64_t program) {
@@ -2191,25 +2210,55 @@ void seed_stage_failed(const Code& c, uint64_t program) {
 std::string seed_path() { return beside_exe("longshot_shaders.bin"); }
 
 size_t seed_open() {
-    if (FILE* f = fopen(seed_path().c_str(), "rb")) {
-        _fseeki64(f, 0, SEEK_END);
-        seed.blob.resize((size_t)_ftelli64(f));
-        _fseeki64(f, 0, SEEK_SET);
-        if (seed.blob.size() < 16 || fread(seed.blob.data(), 1, seed.blob.size(), f) != seed.blob.size() ||
-            memcmp(seed.blob.data(), "HKSEED01", 8))
-            seed.blob.clear();
-        fclose(f);
+#if defined(_WIN32)
+    // Copying longshot_shaders.bin (about 514 MB) into a vector charges that much private commit. A read-only
+    // file view is backed by the file, so a 5 GB job can spend those bytes on the game instead.
+    const std::string path = seed_path();
+    HANDLE file = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER sz{};
+        if (GetFileSizeEx(file, &sz) && sz.QuadPart >= 16) {
+            HANDLE mapping = CreateFileMappingA(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+            void* view = mapping ? MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) : nullptr;
+            if (view && std::memcmp(view, "HKSEED01", 8) == 0) {
+                seed.file = file;
+                seed.mapping = mapping;
+                seed.view = static_cast<const uint8_t*>(view);
+                seed.view_size = (size_t)sz.QuadPart;
+                logf("vk: shader seed mapped from the file, %llu MB", (unsigned long long)(seed.view_size >> 20));
+            } else {
+                if (view) UnmapViewOfFile(view);
+                if (mapping) CloseHandle(mapping);
+                CloseHandle(file);
+            }
+        } else CloseHandle(file);
     }
-    if (seed.blob.empty()) return 0;
+#endif
+    if (!seed.view) {
+        if (FILE* f = fopen(seed_path().c_str(), "rb")) {
+            _fseeki64(f, 0, SEEK_END);
+            seed.blob.resize((size_t)_ftelli64(f));
+            _fseeki64(f, 0, SEEK_SET);
+            if (seed.blob.size() < 16 || fread(seed.blob.data(), 1, seed.blob.size(), f) != seed.blob.size() ||
+                memcmp(seed.blob.data(), "HKSEED01", 8))
+                seed.blob.clear();
+            fclose(f);
+        }
+    }
+    if (!seed_bytes()) return 0;
     disk_init();
     disk_listing = true;
     size_t at = 16;
     // (longshot) every count, size and index is checked against the file before it is used: a file cut short or made
     // wrong is no seed, never a read past it
-    const size_t size = seed.blob.size();
-    const auto u32 = [](size_t pos) { uint32_t v; std::memcpy(&v, seed.blob.data() + pos, 4); return v; };
+    const size_t size = seed_bytes();
+    const auto u32 = [](size_t pos) { uint32_t v; std::memcpy(&v, seed_data() + pos, 4); return v; };
     const auto bad = [] {
-        seed.blob.clear(), seed.stages.clear(), seed.programs.clear(), seed.index.clear();
+        seed_unmap();
+        seed.stages.clear();
+        seed.programs.clear();
+        seed.index.clear();
         disk_listing = false;
         return (size_t)0;
     };
@@ -2224,14 +2273,14 @@ size_t seed_open() {
         st.control = at + 20;
         st.code = st.control + csize;
         at = st.code + bytes;
-        if (csize < kControlSize || !control_end(seed.blob.data() + st.control, &st.end) || st.end > bytes) {
+        if (csize < kControlSize || !control_end(seed_data() + st.control, &st.end) || st.end > bytes) {
             st.end = 0;   // (not one this game's programs can be)
             continue;
         }
-        st.key = code_key(seed.blob.data() + st.control, seed.blob.data() + st.code, st.end);
+        st.key = code_key(seed_data() + st.control, seed_data() + st.code, st.end);
         seed_keys.insert(st.key);
         seed.index.emplace(st.key, (uint32_t)(&st - seed.stages.data()));
-        std::memcpy(st.sph, seed.blob.data() + st.code, std::min<size_t>(sizeof st.sph, st.end));
+        std::memcpy(st.sph, seed_data() + st.code, std::min<size_t>(sizeof st.sph, st.end));
     }
     seed.programs.resize(nprograms);
     for (auto& list : seed.programs) {
@@ -2239,7 +2288,7 @@ size_t seed_open() {
         const uint32_t n = u32(at);
         if (n > (size - at - 4) / 4) return bad();
         list.resize(n);
-        if (n) std::memcpy(list.data(), seed.blob.data() + at + 4, (size_t)n * 4);
+        if (n) std::memcpy(list.data(), seed_data() + at + 4, (size_t)n * 4);
         for (const uint32_t k : list)
             if (k >= nstages) return bad();
         at += 4 + (size_t)n * 4;
@@ -2248,7 +2297,10 @@ size_t seed_open() {
 }
 
 void seed_close() {
-    seed = Seed{};
+    seed_unmap();
+    seed.stages.clear();
+    seed.programs.clear();
+    seed.index.clear();
     disk_listing = false;
 }
 
@@ -2341,7 +2393,7 @@ std::unique_ptr<Program> seed_translate(const SeedStage* const by_stage[8], cons
     if (mesh)
         translate_mesh_into(*p, *blank, by_stage[6] ? &code[6] : nullptr, code[7], nullptr, by_stage[1] ? &code[1] : nullptr, color_types);
     else if (p->compute) {
-        seed_cs_control = seed.blob.data() + by_stage[5]->control;
+        seed_cs_control = seed_data() + by_stage[5]->control;
         translate_into(*p, *blank, nullptr, nullptr, &code[5], color_types);
         seed_cs_control = nullptr;
     } else
@@ -2392,7 +2444,7 @@ SeedVariants seed_compute(size_t i, size_t cap, const std::function<void(Program
     if (!code.ok) return seed_stage_failed(code, cs->key), st_failed++, r.failed = true, r;
     auto blank = std::make_unique<NvnState>();
     blank->nvattr = 16;
-    seed_cs_control = seed.blob.data() + cs->control;
+    seed_cs_control = seed_data() + cs->control;
     struct Reset { ~Reset() { seed_cs_control = nullptr, forced = nullptr, seed_capture = nullptr; } } reset;
     Forced f;
     uint32_t count = 0, end = 0;

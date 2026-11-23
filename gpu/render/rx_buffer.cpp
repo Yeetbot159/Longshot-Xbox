@@ -55,7 +55,7 @@ std::unordered_map<WGPUBuffer, Segment*> segment_of_buffer;
 int64_t batch_id;
 bool watch_ok = true;
 #if defined(A64_WRITE_TRACK) && !defined(__EMSCRIPTEN__)
-extern "C" uint8_t a64_dirty[1ull << 27];   // (rt/a64_rt.c: (mkw-recomp) A64_DIRTY_PAGES, a mark per page of 512 GB)
+extern "C" uint8_t *a64_dirty;   // (rt/a64_rt.c) one mark per guest page, reserved and committed on use
 #endif
 // (mkw-recomp) A table with an entry per guest page, as a std::vector would hold it, but in memory committed
 // untouched: MKW's guest window is 512 GB (a 1 GB table of 64-bit entries), of which the GPU sees a few GB. Pages

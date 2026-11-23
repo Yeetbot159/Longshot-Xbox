@@ -58,6 +58,156 @@
 #include "vk_work.h"   // (after the others: counts the commands that do GPU work, for full_barrier)
 
 namespace mkwvk {
+
+void memory_log_commit_split() {
+#if defined(_WIN32)
+    if (!host || !host->guest_base || !host->guest_size) return;
+    uint8_t* const base = host->guest_base();
+    const uint64_t gsize = host->guest_size();
+    if (!base || !gsize) return;
+    uint64_t guest = 0;
+    MEMORY_BASIC_INFORMATION mbi{};
+    for (uint8_t* p = base; p < base + gsize;) {
+        if (!VirtualQuery(p, &mbi, sizeof mbi)) break;
+        uint8_t* next = (uint8_t*)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= p) break;
+        if (mbi.State == MEM_COMMIT) guest += (uint64_t)mbi.RegionSize;
+        p = next;
+    }
+    uint64_t image_b = 0, mapped_b = 0, private_b = 0;
+    struct Hit { uint64_t size; uintptr_t addr; };
+    Hit top[12]{};
+    std::unordered_map<uintptr_t, uint64_t> by_alloc;
+    uint8_t* p = nullptr;
+    for (int queries = 0; queries < 200000; queries++) {
+        if (!VirtualQuery(p, &mbi, sizeof mbi)) break;
+        uint8_t* next = (uint8_t*)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= p) break;
+        const auto addr = (uintptr_t)mbi.BaseAddress;
+        const bool in_guest = addr >= (uintptr_t)base && addr < (uintptr_t)base + gsize;
+        if (mbi.State == MEM_COMMIT && !in_guest) {
+            if (mbi.Type == MEM_IMAGE) image_b += (uint64_t)mbi.RegionSize;
+            else if (mbi.Type == MEM_MAPPED) mapped_b += (uint64_t)mbi.RegionSize;
+            else private_b += (uint64_t)mbi.RegionSize;
+            if (mbi.Type == MEM_PRIVATE)
+                by_alloc[(uintptr_t)mbi.AllocationBase] += (uint64_t)mbi.RegionSize;
+        }
+        p = next;
+    }
+    for (const auto& kv : by_alloc) {
+        Hit h{kv.second, kv.first};
+        for (int i = 0; i < 12; i++) if (h.size > top[i].size) std::swap(h, top[i]);
+    }
+    uint64_t low = 0, heap = 0, high = 0;
+    for (uint8_t* q = base; q < base + gsize;) {
+        if (!VirtualQuery(q, &mbi, sizeof mbi)) break;
+        uint8_t* next = (uint8_t*)mbi.BaseAddress + mbi.RegionSize;
+        if (next <= q) break;
+        if (mbi.State == MEM_COMMIT) {
+            const uint64_t off = (uint64_t)((uint8_t*)mbi.BaseAddress - base);
+            (off < (4ull << 30) ? low : off < (80ull << 30) ? heap : high) += (uint64_t)mbi.RegionSize;
+        }
+        q = next;
+    }
+    uint64_t b64 = 0, b16 = 0, b4 = 0, b1 = 0, brest = 0;
+    int n64 = 0, n16 = 0, n4 = 0, n1 = 0, nrest = 0;
+    for (const auto& kv : by_alloc) {
+        const uint64_t s = kv.second;
+        if (s >= (64ull << 20)) b64 += s, n64++;
+        else if (s >= (16ull << 20)) b16 += s, n16++;
+        else if (s >= (4ull << 20)) b4 += s, n4++;
+        else if (s >= (1ull << 20)) b1 += s, n1++;
+        else brest += s, nrest++;
+    }
+    logf("vk: commit split: guest %llu MB (below 4 GB %llu, to 80 GB %llu, above %llu); other image %llu MB, mapped %llu MB, private %llu MB",
+         (unsigned long long)(guest >> 20), (unsigned long long)(low >> 20), (unsigned long long)(heap >> 20),
+         (unsigned long long)(high >> 20), (unsigned long long)(image_b >> 20), (unsigned long long)(mapped_b >> 20),
+         (unsigned long long)(private_b >> 20));
+    logf("vk: private buckets: >=64 MB %d allocs %llu MB, >=16 %d/%llu, >=4 %d/%llu, >=1 %d/%llu, smaller %d/%llu",
+         n64, (unsigned long long)(b64 >> 20), n16, (unsigned long long)(b16 >> 20), n4, (unsigned long long)(b4 >> 20),
+         n1, (unsigned long long)(b1 >> 20), nrest, (unsigned long long)(brest >> 20));
+    for (int i = 0; i < 12; i++)
+        if (top[i].size >= (8ull << 20))
+            logf("vk: commit split: private allocation %p %llu MB", (void*)top[i].addr, (unsigned long long)(top[i].size >> 20));
+    uint64_t wc = 0, rw = 0, ro = 0, otherp = 0;
+    HANDLE heaps[64];
+    const DWORD nheaps = GetProcessHeaps(64, heaps);
+    uint64_t heap_commit = 0, heap_alloc = 0;
+    for (DWORD i = 0; i < nheaps && i < 64; i++) {
+        HEAP_SUMMARY hs{};
+        hs.cb = sizeof hs;
+        if (HeapSummary(heaps[i], 0, &hs)) {
+            heap_commit += (uint64_t)hs.cbCommitted;
+            heap_alloc += (uint64_t)hs.cbAllocated;
+        }
+    }
+    int named = 0;
+    for (const auto& kv : by_alloc) {
+        MEMORY_BASIC_INFORMATION one{};
+        if (!VirtualQuery((void*)kv.first, &one, sizeof one)) continue;
+        const DWORD prot = one.Protect;
+        if (prot & PAGE_WRITECOMBINE) wc += kv.second;
+        else if (prot & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE)) rw += kv.second;
+        else if (prot & (PAGE_READONLY | PAGE_EXECUTE_READ)) ro += kv.second;
+        else otherp += kv.second;
+        if (kv.second < (64ull << 20) || named >= 8) continue;
+        const DWORD read = PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_WRITECOPY;
+        uint64_t hit = 0;
+        unsigned char mark[16]{};
+        if ((prot & read) && !(prot & PAGE_GUARD) && one.State == MEM_COMMIT) {
+            const uint8_t* b = (const uint8_t*)kv.first;
+            const uint64_t step = 1ull << 20;
+            for (uint64_t off = 0; off + 16 <= kv.second; off += step) {
+                int z = 1;
+                for (int k = 0; k < 16; k++) if (b[off + k]) { z = 0; break; }
+                if (!z) {
+                    hit = off;
+                    memcpy(mark, b + off, 16);
+                    break;
+                }
+            }
+        }
+        logf("vk: private block %p %llu MB prot 0x%lx first-data +%llu MB %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+             (void*)kv.first, (unsigned long long)(kv.second >> 20), (unsigned long)prot, (unsigned long long)(hit >> 20),
+             mark[0], mark[1], mark[2], mark[3], mark[4], mark[5], mark[6], mark[7],
+             mark[8], mark[9], mark[10], mark[11], mark[12], mark[13], mark[14], mark[15]);
+        named++;
+    }
+    std::map<DWORD, uint64_t> by_prot;
+    for (const auto& kv : by_alloc) {
+        MEMORY_BASIC_INFORMATION one{};
+        if (VirtualQuery((void*)kv.first, &one, sizeof one)) by_prot[one.Protect] += kv.second;
+    }
+    for (const auto& kv : by_prot)
+        if (kv.second >= (32ull << 20))
+            logf("vk: private protect 0x%lx is %llu MB", (unsigned long)kv.first, (unsigned long long)(kv.second >> 20));
+    int zero_n = 0;
+    for (const auto& kv : by_alloc) {
+        if (kv.second < (8ull << 20) || zero_n >= 16) continue;
+        MEMORY_BASIC_INFORMATION base{};
+        if (!VirtualQuery((void*)kv.first, &base, sizeof base) || base.Protect) continue;
+        MEMORY_BASIC_INFORMATION hit{};
+        for (uint8_t* p = (uint8_t*)kv.first; p < (uint8_t*)kv.first + kv.second + (64ull << 20);) {
+            if (!VirtualQuery(p, &hit, sizeof hit)) break;
+            if (hit.State == MEM_COMMIT && hit.Protect) break;
+            uint8_t* next = (uint8_t*)hit.BaseAddress + hit.RegionSize;
+            if (next <= p) break;
+            p = next;
+        }
+        logf("vk: protect0 %p %llu MB base state 0x%lx prot 0x%lx allocprot 0x%lx; committed page prot 0x%lx",
+             (void*)kv.first, (unsigned long long)(kv.second >> 20), (unsigned long)base.State,
+             (unsigned long)base.Protect, (unsigned long)base.AllocationProtect, (unsigned long)hit.Protect);
+        zero_n++;
+    }
+    logf("vk: private protect: write-combine %llu MB, read-write %llu MB, read-only %llu MB, other %llu MB; %lu heaps commit %llu MB allocated %llu MB",
+         (unsigned long long)(wc >> 20), (unsigned long long)(rw >> 20), (unsigned long long)(ro >> 20),
+         (unsigned long long)(otherp >> 20), (unsigned long)nheaps,
+         (unsigned long long)(heap_commit >> 20), (unsigned long long)(heap_alloc >> 20));
+#else
+    (void)0;
+#endif
+}
+
 namespace {
 
 VkDeviceAddress queried_buffer_address(VkBuffer buffer) {

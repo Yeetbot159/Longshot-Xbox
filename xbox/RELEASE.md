@@ -23,6 +23,7 @@ People** in `certlm.msc` after testing if you no longer want to trust packages s
 
 ## What changed
 
+- On this PC, under a 5 GiB job, eight CPUs, and a 33.33% host CPU cap, the long opening movie (9,254 pictures) plays when guest maps stay at 1,100 MB during a movie, dav1d is in its low-memory mode, and Dozen uses coherent copies for guest pools that cannot be imported. After that movie the in-engine Deku Tree timeline was not requested. Kokiri Forest, Hyrule Field, and a game save were not reached. This was not run on a console.
 - The probe tests a CPU-mapped D3D12 write-back buffer using a shader that reads CPU-written values and writes results
   for the CPU to check after a fence. A Series S 0.2.23.0 report passed this small test; it is not a guest-memory fallback.
 - The probe and its shader were built locally under a 5 GiB job memory limit and eight-CPU affinity, with a 33.33%
@@ -114,6 +115,9 @@ nonuniform indexing or runtime descriptor arrays. Dozen storage-buffer array bin
 unverified on console. The failed host-import attempts leave the current guest-pool and mesh fallback paths unverified
 on the tested Series S; a successful D3D12 SRV-array pipeline alone does not establish Vulkan or gameplay support. On-console
 Python/clang building and a Series X probe also remain unverified.
+
+A PC run of the opening movie under those limits is not console play. The Deku Tree scene, Kokiri Forest, Hyrule
+Field, and a game save were not reached.
 
 The packages contain no game files or data derived from a game. The certificate is public and contains no private
 signing key. After installing, set the app type to **Game** in Dev Home for useful memory measurements.

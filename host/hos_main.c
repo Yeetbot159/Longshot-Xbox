@@ -1494,11 +1494,29 @@ int hos_oot_opening(Ctx *c, int mode) {
         logged[0] = 0;
         return 0;
     }
+    name[0] = 0;
     if (!c || rx_option(HOS_OPT_SKIP_OPENING, 0) <= 0) {
         armed = 0;
+        /* Skip is off. The names still say whether the Deku Tree timeline was asked for. */
+        if (c && (mode == 0 || mode == 1)) {
+            uint64_t q = 0;
+            if (mode == 0) {
+                const uint64_t arg = c->x[1];
+                q = arg ? recomp_load64(c, arg + 6800) : 0;
+            } else if (c->x[1]) q = recomp_load64(c, c->x[1]);
+            if (q) {
+                size_t i = 0;
+                for (; i + 1 < sizeof name; i++) {
+                    name[i] = (char)recomp_load8(c, q + i);
+                    name[i + 1] = 0;
+                    if (!name[i]) break;
+                }
+                if (name[0] && (strstr(name, "Kokiri") || strstr(name, "Opening") || strstr(name, "Deku")))
+                    hos_log("opening: mode %d %s", mode, name);
+            }
+        }
         return 0;
     }
-    name[0] = 0;
     if (mode == 0) {
         const uint64_t arg = c->x[1];
         p = arg ? recomp_load64(c, arg + 6800) : 0;

@@ -301,12 +301,31 @@ static uint64_t commit_reserve() {
 }
 // (what Windows lets the process commit before its limit, RAM plus the page file: GlobalMemoryStatusEx's ullAvailPageFile, the
 // limit less the whole system's commit. false where it cannot be read)
+static void compact_process_heaps() {
+#if defined(_WIN32)
+    DWORD n = GetProcessHeaps(0, nullptr);
+    if (!n || n > 256) return;
+    HANDLE heaps[256];
+    n = GetProcessHeaps(n, heaps);
+    for (DWORD i = 0; i < n; i++) HeapCompact(heaps[i], 0);
+#endif
+}
 static bool commit_headroom(uint64_t* free_bytes) {
 #if defined(_WIN32)
     MEMORYSTATUSEX m{};
     m.dwLength = sizeof m;
     if (!GlobalMemoryStatusEx(&m)) return false;
-    *free_bytes = m.ullAvailPageFile;
+    uint64_t free = m.ullAvailPageFile;
+    // The page file can have tens of GB free while this process's job is already full. The job's
+    // remaining commit is the number that actually decides whether the game's next page succeeds.
+    const uint64_t job = process_job_memory_limit();
+    if (job) {
+        PROCESS_MEMORY_COUNTERS_EX pm{};
+        pm.cb = sizeof pm;
+        if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pm, sizeof pm))
+            free = std::min(free, pm.PrivateUsage < job ? job - pm.PrivateUsage : 0);
+    }
+    *free_bytes = free;
     return true;
 #else
     (void)free_bytes;
@@ -4177,10 +4196,15 @@ void texture_frame(uint64_t completed) {
         if (frame_no % 600 == 0) {   // (the process's memory now and then: what the host side holds)
             PROCESS_MEMORY_COUNTERS_EX pm{};
             pm.cb = sizeof pm;
-            if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pm, sizeof pm))
-                logf("vk: memory: working set %llu MB (peak %llu), private %llu MB, staging %llu MB in %zu arenas",
+            if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pm, sizeof pm)) {
+                const uint64_t job = process_job_memory_limit();
+                logf("vk: memory: working set %llu MB (peak %llu), private %llu MB, staging %llu MB in %zu arenas, job %llu MB left of %llu",
                      (unsigned long long)(pm.WorkingSetSize >> 20), (unsigned long long)(pm.PeakWorkingSetSize >> 20),
-                     (unsigned long long)(pm.PrivateUsage >> 20), (unsigned long long)(kept >> 20), arenas.size());
+                     (unsigned long long)(pm.PrivateUsage >> 20), (unsigned long long)(kept >> 20), arenas.size(),
+                     (unsigned long long)((job > pm.PrivateUsage ? job - pm.PrivateUsage : 0) >> 20),
+                     (unsigned long long)(job >> 20));
+            }
+            memory_log_commit_split();
 #if defined(__linux__) && defined(__GLIBC__)
             // (glibc's heap: what its arenas hold free. The shader translation and the loads' decoding leave their garbage spread through
             // the threads' arenas (26 of them, 1.2 GB resident in Kokiri Forest, the heap's growth in a scene change never going back),
@@ -4419,8 +4443,30 @@ void texture_frame(uint64_t completed) {
     // then give blocks back. RX_VK_COMMIT_RESERVE_MB=<MB> (default 2560; 0: off)
     {
         uint64_t commit_free = 0;
-        const uint64_t reserve = commit_reserve();
+        uint64_t reserve = commit_reserve();
+        // The ordinary reserve is 2.5 GB of page file. Inside a 5 GB job that would empty the texture
+        // cache at the title. Keep a slice of the job for the game, and only shrink textures once the
+        // job itself is that close to full. RX_VK_COMMIT_RESERVE_MB still overrides this.
+        const uint64_t job = process_job_memory_limit();
+        if (job && job < (8ull << 30) && !getenv("RX_VK_COMMIT_RESERVE_MB"))
+            reserve = std::min(reserve, std::max(384ull << 20, job / 8));
         if (reserve && commit_headroom(&commit_free) && commit_free < reserve) {
+            // The opening movie's next part commits hundreds of MB. Give the process heaps back first so that
+            // commit can land inside the 5 GB job instead of failing and crashing the scene.
+            static uint64_t compacted_at = 0;
+            if (!compacted_at || frame_no - compacted_at >= 60) {
+                compacted_at = frame_no;
+                PROCESS_MEMORY_COUNTERS_EX before{};
+                before.cb = sizeof before;
+                K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&before, sizeof before);
+                compact_process_heaps();
+                PROCESS_MEMORY_COUNTERS_EX after{};
+                after.cb = sizeof after;
+                if (K32GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&after, sizeof after))
+                    logf("vk: heaps compacted near the job cap: private %llu -> %llu MB",
+                         (unsigned long long)(before.PrivateUsage >> 20), (unsigned long long)(after.PrivateUsage >> 20));
+                commit_headroom(&commit_free);
+            }
             const uint64_t over = reserve - commit_free;
             budget = std::min(budget, total_bytes > over ? total_bytes - over : 0);
             rule_budget = std::min(rule_budget, total_bytes > over ? total_bytes - over : 0);
